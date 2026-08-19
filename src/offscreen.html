@@ -29,7 +29,11 @@ chrome.runtime.onMessage.addListener(function(message, _sender, sendResponse) {
 </script>
 <script src="../engine/stockfish.js"></script>
 <script>
+// stockfish.js called run() but noInitialRun skipped callMain(),
+// so the UCI loop never started. Start it now via _main().
+// Wrap in try because the engine may already be running in some edge cases.
 try { Module._main(); } catch(e) {}
+// Signal that the engine is alive and _uci_command is available.
 chrome.runtime.sendMessage({ type: 'sf-engine-loaded' }).catch(function() {});
 </script>
 </body>

@@ -1,7 +1,7 @@
 const GEMINI_MODEL = 'gemini-2.0-flash';
+const TABLEBASE_URL = 'https://tablebase.lichess.ovh/standard';
 const CACHE_TTL = 60000;
 const MAX_CACHE_SIZE = 50;
-const ENGINE_DEPTH = 18;
 
 let analysisTimeout = null;
 let positionCache = new Map();
@@ -10,6 +10,8 @@ let offscreenCreated = false;
 let engineReady = false;
 let engineReadyWaiters = [];
 let pendingEval = null;
+let lastEval = null;
+let settings = { depth: 18, multiPv: 3, sound: true, debounceMs: 500, classify: true, geminiPrompt: '' };
 
 const OPENINGS = {
   'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR': "King's Pawn",
@@ -24,37 +26,47 @@ const OPENINGS = {
   'rnbqkbnr/pppp1ppp/8/8/3nP2N/8/PPPP1PPP/RNBQKB1R': 'Scotch'
 };
 
+function countPieces(fen) {
+  const board = fen.split(' ')[0];
+  let count = 0;
+  for (const ch of board) {
+    if (ch >= '1' && ch <= '8') count += parseInt(ch);
+    else if (ch !== '/') count += 1;
+  }
+  return count;
+}
+
+function classifyMove(prevCp, currCp, isMate) {
+  if (prevCp == null || currCp == null) return null;
+  const diff = prevCp - currCp;
+  if (isMate) return diff > 50 ? 'brilliant' : diff > 0 ? 'good' : diff > -100 ? 'inaccuracy' : diff > -300 ? 'mistake' : 'blunder';
+  if (diff >= -10) return 'brilliant';
+  if (diff >= -30) return 'good';
+  if (diff >= -100) return 'inaccuracy';
+  if (diff >= -300) return 'mistake';
+  return 'blunder';
+}
+
+function classifyLabel(cls) {
+  const map = { brilliant: '!!', good: '!', inaccuracy: '?!', mistake: '?', blunder: '??' };
+  return map[cls] || '';
+}
+
 function validateFen(fen) {
   const fields = fen.trim().split(/\s+/);
-  if (fields.length < 4) {
-    throw new Error('Invalid FEN: expected at least 5 fields, got ' + fields.length);
-  }
-
+  if (fields.length < 4) throw new Error('Invalid FEN: expected at least 5 fields, got ' + fields.length);
   const ranks = fields[0].split('/');
-  if (ranks.length !== 8) {
-    throw new Error('Invalid FEN: expected 8 ranks, got ' + ranks.length);
-  }
-
+  if (ranks.length !== 8) throw new Error('Invalid FEN: expected 8 ranks, got ' + ranks.length);
   for (let i = 0; i < ranks.length; i++) {
     let squares = 0;
     for (const ch of ranks[i]) {
-      if (ch >= '1' && ch <= '8') {
-        squares += parseInt(ch);
-      } else if ('prnbqkPRNBQK'.includes(ch)) {
-        squares += 1;
-      } else {
-        throw new Error('Invalid FEN: bad character "' + ch + '" in rank ' + (i + 1));
-      }
+      if (ch >= '1' && ch <= '8') squares += parseInt(ch);
+      else if ('prnbqkPRNBQK'.includes(ch)) squares += 1;
+      else throw new Error('Invalid FEN: bad character "' + ch + '" in rank ' + (i + 1));
     }
-    if (squares !== 8) {
-      throw new Error('Invalid FEN: rank ' + (i + 1) + ' has ' + squares + ' squares, expected 8');
-    }
+    if (squares !== 8) throw new Error('Invalid FEN: rank ' + (i + 1) + ' has ' + squares + ' squares, expected 8');
   }
-
-  if (fields[1] !== 'w' && fields[1] !== 'b') {
-    throw new Error('Invalid FEN: side to move must be "w" or "b", got "' + fields[1] + '"');
-  }
-
+  if (fields[1] !== 'w' && fields[1] !== 'b') throw new Error('Invalid FEN: side to move must be "w" or "b"');
   return fields.join(' ');
 }
 
@@ -73,9 +85,18 @@ function setCache(fen, data) {
   positionCache.set(fen, { data, ts: Date.now() });
 }
 
+async function loadSettings() {
+  const stored = await chrome.storage.local.get(['depth', 'multiPv', 'sound', 'debounceMs', 'classify', 'geminiPrompt']);
+  if (stored.depth) settings.depth = stored.depth;
+  if (stored.multiPv) settings.multiPv = stored.multiPv;
+  if (stored.sound != null) settings.sound = stored.sound;
+  if (stored.debounceMs) settings.debounceMs = stored.debounceMs;
+  if (stored.classify != null) settings.classify = stored.classify;
+  if (stored.geminiPrompt != null) settings.geminiPrompt = stored.geminiPrompt;
+}
+
 function detectOpening(fen) {
-  const board = fen.split(' ')[0];
-  return OPENINGS[board] || null;
+  return OPENINGS[fen.split(' ')[0]] || null;
 }
 
 async function ensureOffscreen() {
@@ -93,21 +114,39 @@ async function ensureOffscreen() {
   }
 }
 
-function waitForEngine(timeoutMs = 15000) {
+function waitForEngine(timeoutMs) {
   if (engineReady) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       const idx = engineReadyWaiters.indexOf(waiter);
       if (idx !== -1) engineReadyWaiters.splice(idx, 1);
       reject(new Error('Engine init timeout'));
-    }, timeoutMs);
-    const waiter = { resolve: () => { clearTimeout(timer); resolve(); }, reject };
+    }, timeoutMs || 15000);
+    const waiter = { resolve: function() { clearTimeout(timer); resolve(); }, reject: reject };
     engineReadyWaiters.push(waiter);
   });
 }
 
 function sfCommand(cmd) {
-  chrome.runtime.sendMessage({ type: 'sf-cmd', cmd }).catch(() => {});
+  chrome.runtime.sendMessage({ type: 'sf-cmd', cmd }).catch(function() {});
+}
+
+async function queryTablebase(fen) {
+  try {
+    const resp = await fetch(TABLEBASE_URL + '?fen=' + encodeURIComponent(fen));
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (data.category === 'draw' || data.category === 'blessed-loss' || data.category === 'cursed-win') {
+      return { category: data.category, dtm: data.dtm, moves: (data.moves || []).slice(0, settings.multiPv).map(m => ({
+        move: m.san, uci: m.uci, category: m.category, dtm: m.dtm
+      }))};
+    }
+    return { category: data.category, dtm: data.dtm, moves: (data.moves || []).slice(0, settings.multiPv).map(m => ({
+      move: m.san, uci: m.uci, category: m.category, dtm: m.dtm
+    }))};
+  } catch (e) {
+    return null;
+  }
 }
 
 function evaluateWithStockfish(fen, multiPv) {
@@ -118,21 +157,18 @@ function evaluateWithStockfish(fen, multiPv) {
       clearTimeout(old.timeout);
       old.reject(new Error('Superseded by new request'));
     }
-
-    const info = { lines: [], resolve, reject, timeout: null };
+    const info = { lines: [], resolve: resolve, reject: reject, timeout: null };
     pendingEval = info;
-
-    info.timeout = setTimeout(() => {
+    info.timeout = setTimeout(function() {
       if (pendingEval === info) {
         pendingEval = null;
         reject(new Error('Engine evaluation timeout'));
       }
     }, 30000);
-
     sfCommand('stop');
     sfCommand('ucinewgame');
     sfCommand('position fen ' + fen);
-    sfCommand('go depth ' + ENGINE_DEPTH + ' multipv ' + multiPv);
+    sfCommand('go depth ' + settings.depth + ' multipv ' + multiPv);
   });
 }
 
@@ -143,12 +179,10 @@ function processEngineLine(text) {
     engineReadyWaiters = [];
     return;
   }
-
   if (text.startsWith('bestmove') && pendingEval) {
     const info = pendingEval;
     pendingEval = null;
     clearTimeout(info.timeout);
-
     const move = text.split(' ')[1];
     const parsed = parseInfoLines(info.lines);
     if (!parsed.length && move) {
@@ -157,7 +191,6 @@ function processEngineLine(text) {
     info.resolve({ bestMove: move, moves: parsed });
     return;
   }
-
   if (text.startsWith('info ') && pendingEval && text.includes(' pv ')) {
     pendingEval.lines.push(text);
   }
@@ -175,8 +208,7 @@ function parseInfoLines(lines) {
     if (seen.has(move)) continue;
     seen.add(move);
     result.push({
-      move: move,
-      line: pvMatch[1],
+      move: move, line: pvMatch[1],
       evaluation: scoreMatch && scoreMatch[1] === 'cp' ? parseInt(scoreMatch[2]) : null,
       mate: scoreMatch && scoreMatch[1] === 'mate' ? parseInt(scoreMatch[2]) : null,
       depth: depthMatch ? parseInt(depthMatch[1]) : null
@@ -189,13 +221,16 @@ async function explainWithGemini(fen, engine) {
   const { geminiApiKey } = await chrome.storage.local.get('geminiApiKey');
   if (!geminiApiKey) return 'Add a Gemini API key in settings for explanations.';
   const topMove = engine.moves[0];
-  const prompt = [
-    'You are a chess coach. Explain this position briefly.',
-    'FEN: ' + fen,
-    'Best move: ' + topMove.move,
-    'Line: ' + topMove.line,
-    'Explain in 2-3 sentences why it is strong.'
-  ].join('\n');
+  const customPrompt = settings.geminiPrompt;
+  const prompt = customPrompt
+    ? customPrompt.replace('{fen}', fen).replace('{move}', topMove.move).replace('{line}', topMove.line)
+    : [
+      'You are a chess coach. Explain this position briefly.',
+      'FEN: ' + fen,
+      'Best move: ' + topMove.move,
+      'Line: ' + topMove.line,
+      'Explain in 2-3 sentences why it is strong.'
+    ].join('\n');
   try {
     const response = await fetch(
       'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent',
@@ -216,63 +251,88 @@ async function explainWithGemini(fen, engine) {
 }
 
 async function analyzePosition(fen) {
+  await loadSettings();
   await waitForEngine();
   const validated = validateFen(fen);
-  const cached = getCached(validated);
-  const engine = cached || await evaluateWithStockfish(validated, 3);
-  if (!cached) setCache(validated, engine);
+  const pieceCount = countPieces(validated);
 
-  let explanation = null;
-  try {
-    explanation = await explainWithGemini(validated, engine);
-  } catch (e) {
-    explanation = 'Explanation unavailable.';
+  let engine;
+  let opening = detectOpening(validated);
+  let classification = null;
+
+  if (pieceCount <= 7) {
+    const tb = await queryTablebase(validated);
+    if (tb) {
+      engine = {
+        moves: tb.moves.map(function(m) {
+          return { move: m.move, line: m.uci, evaluation: null, mate: m.dtm, depth: null, tablebase: m.category };
+        }),
+        depth: 100, fen: validated, tablebase: true, category: tb.category
+      };
+    }
   }
 
-  const opening = detectOpening(validated);
-  gameHistory.push({ fen: validated, bestMove: engine.moves[0].move, timestamp: Date.now() });
+  if (!engine) {
+    const cached = getCached(validated);
+    engine = cached || await evaluateWithStockfish(validated, settings.multiPv);
+    if (!cached) setCache(validated, engine);
+  }
+
+  if (lastEval != null && settings.classify) {
+    const currCp = engine.moves[0].evaluation;
+    const isMate = engine.moves[0].mate != null;
+    classification = classifyMove(lastEval, currCp, isMate);
+  }
+  const currCp = engine.moves[0].evaluation;
+  if (currCp != null) lastEval = currCp;
+
+  let explanation = null;
+  try { explanation = await explainWithGemini(validated, engine); }
+  catch (e) { explanation = 'Explanation unavailable.'; }
+
+  gameHistory.push({
+    fen: validated, bestMove: engine.moves[0].move, eval: currCp,
+    timestamp: Date.now(), classification: classification
+  });
   if (gameHistory.length > 200) gameHistory = gameHistory.slice(-200);
 
-  return { ok: true, engine: engine, explanation: explanation, opening: opening };
+  return {
+    ok: true, engine: engine, explanation: explanation, opening: opening,
+    classification: classification, classifyLabel: classifyLabel(classification),
+    tablebase: !!engine.tablebase, category: engine.category || null
+  };
 }
 
 function sendAnalysisToPopup(result) {
-  chrome.runtime.sendMessage(Object.assign({ type: 'analysis-result' }, result)).catch(() => {});
+  chrome.runtime.sendMessage(Object.assign({ type: 'analysis-result' }, result)).catch(function() {});
 }
 
 async function handleBoardUpdate(fen) {
   if (analysisTimeout) clearTimeout(analysisTimeout);
-  analysisTimeout = setTimeout(async () => {
+  analysisTimeout = setTimeout(async function() {
     try {
       const result = await analyzePosition(fen);
       sendAnalysisToPopup(result);
       const bestMove = result.engine.moves[0].move;
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
         if (tabs[0] && tabs[0].id) {
           chrome.tabs.sendMessage(tabs[0].id, {
             type: 'draw-arrow',
-            from: bestMove.substring(0, 2),
-            to: bestMove.substring(2, 4),
+            from: bestMove.substring(0, 2), to: bestMove.substring(2, 4),
             color: '#ff6b35'
-          }).catch(() => {});
+          }).catch(function() {});
         }
       });
     } catch (error) {
       sendAnalysisToPopup({ ok: false, error: error.message });
     }
-  }, 500);
+  }, settings.debounceMs);
 }
 
 function generatePGN() {
   if (!gameHistory.length) return '';
   const dateStr = new Date().toISOString().split('T')[0];
-  let pgn = '';
-  pgn += '[Event "Live Analysis"]\n';
-  pgn += '[Site "Chess Analyst"]\n';
-  pgn += '[Date "' + dateStr + '"]\n';
-  pgn += '[White "User"]\n';
-  pgn += '[Black "Engine"]\n';
-  pgn += '\n';
+  let pgn = '[Event "Live Analysis"]\n[Site "Chess Analyst"]\n[Date "' + dateStr + '"]\n[White "User"]\n[Black "Engine"]\n\n';
   const moves = gameHistory.filter(function(g) { return g.bestMove; });
   for (let i = 0; i < moves.length; i++) {
     if (i % 2 === 0) pgn += (Math.floor(i / 2) + 1) + '. ';
@@ -281,61 +341,93 @@ function generatePGN() {
   return pgn.trim();
 }
 
+function calculateAccuracy() {
+  if (gameHistory.length < 2) return null;
+  let totalDiff = 0;
+  let count = 0;
+  for (let i = 1; i < gameHistory.length; i++) {
+    const prev = gameHistory[i - 1].eval;
+    const curr = gameHistory[i].eval;
+    if (prev != null && curr != null) {
+      const diff = Math.abs(prev - curr);
+      totalDiff += Math.max(0, 100 - diff / 10);
+      count++;
+    }
+  }
+  return count > 0 ? totalDiff / count : null;
+}
+
+async function saveGameToArchive() {
+  if (gameHistory.length < 2) return;
+  const accuracy = calculateAccuracy();
+  const { gameArchive = [] } = await chrome.storage.local.get('gameArchive');
+  gameArchive.push({
+    timestamp: Date.now(),
+    moves: gameHistory.map(function(g) { return g.bestMove; }),
+    evals: gameHistory.map(function(g) { return g.eval; }),
+    accuracy: accuracy
+  });
+  if (gameArchive.length > 50) gameArchive.splice(0, gameArchive.length - 50);
+  await chrome.storage.local.set({ gameArchive: gameArchive });
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'sf-line') {
     processEngineLine(message.text);
     return false;
   }
-
   if (message.type === 'sf-engine-loaded') {
-    if (!engineReady) {
-      sfCommand('uci');
-    }
+    if (!engineReady) sfCommand('uci');
     return false;
   }
-
   if (message.type === 'analyze-position') {
-    (async () => {
-      try {
-        sendResponse(await analyzePosition(message.fen));
-      } catch (error) {
-        sendResponse({ ok: false, error: error.message });
-      }
+    (async function() {
+      try { sendResponse(await analyzePosition(message.fen)); }
+      catch (error) { sendResponse({ ok: false, error: error.message }); }
     })();
     return true;
   }
-
   if (message.type === 'board-update') {
     handleBoardUpdate(message.fen);
     return false;
   }
-
   if (message.type === 'export-pgn') {
     sendResponse({ ok: true, pgn: generatePGN() });
     return true;
   }
-
   if (message.type === 'engine-status') {
     sendResponse({ ok: true, ready: engineReady });
     return true;
   }
-
+  if (message.type === 'get-history') {
+    sendResponse({ ok: true, history: gameHistory });
+    return true;
+  }
+  if (message.type === 'save-game') {
+    saveGameToArchive().then(function() { sendResponse({ ok: true }); });
+    return true;
+  }
+  if (message.type === 'get-evals') {
+    const evals = gameHistory.map(function(g) { return g.eval; });
+    sendResponse({ ok: true, evals: evals });
+    return true;
+  }
   return undefined;
 });
 
 chrome.commands.onCommand.addListener((command) => {
   if (command === 'toggle-analysis') {
-    chrome.storage.local.get('monitoring', ({ monitoring }) => {
-      const newState = !monitoring;
+    chrome.storage.local.get('monitoring', function(data) {
+      const newState = !data.monitoring;
       chrome.storage.local.set({ monitoring: newState });
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
         if (tabs[0] && tabs[0].id) {
           chrome.tabs.sendMessage(tabs[0].id, {
             type: newState ? 'start-monitoring' : 'stop-monitoring'
-          }).catch(() => {});
+          }).catch(function() {});
         }
       });
-      chrome.runtime.sendMessage({ type: 'monitoring-toggled', monitoring: newState }).catch(() => {});
+      chrome.runtime.sendMessage({ type: 'monitoring-toggled', monitoring: newState }).catch(function() {});
     });
   }
 });
@@ -344,15 +436,16 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
   try {
     const tab = await chrome.tabs.get(activeInfo.tabId);
     if (tab.url && tab.url.includes('chess.com')) {
-      chrome.tabs.sendMessage(activeInfo.tabId, { type: 'start-monitoring' }).catch(() => {});
+      chrome.tabs.sendMessage(activeInfo.tabId, { type: 'start-monitoring' }).catch(function() {});
     }
   } catch (e) {}
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab.url && tab.url.includes('chess.com')) {
-    chrome.tabs.sendMessage(tabId, { type: 'start-monitoring' }).catch(() => {});
+    chrome.tabs.sendMessage(tabId, { type: 'start-monitoring' }).catch(function() {});
   }
 });
 
 ensureOffscreen();
+loadSettings();

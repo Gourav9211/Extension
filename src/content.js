@@ -1,7 +1,7 @@
 let lastFen = '';
 let observer = null;
-let monitoring = false;
-let arrowOverlay = null;
+let coordsOverlay = null;
+let coordsVisible = false;
 
 function findBoard() {
   return document.querySelector('[data-board], .board, chess-board, [class*="board"]');
@@ -18,10 +18,14 @@ function squareFromClass(squareNumber, isBlackOrientation) {
 
 function capturePosition() {
   const board = findBoard();
-  if (!board) throw new Error('No Chess.com board was found on this page.');
+  if (!board) {
+    throw new Error('No Chess.com board was found on this page.');
+  }
 
   const directFen = board.getAttribute('data-fen') || board.closest('[data-fen]')?.getAttribute('data-fen');
-  if (directFen) return { fen: directFen, source: 'Chess.com board FEN' };
+  if (directFen) {
+    return { fen: directFen, source: 'Chess.com board FEN' };
+  }
 
   const isBlackOrientation = /orientation-black/.test(board.className) || /orientation-black/.test(board.parentElement?.className || '');
   const pieces = [...board.querySelectorAll('.piece')];
@@ -35,7 +39,9 @@ function capturePosition() {
     squares.set(squareFromClass(Number(squareMatch[1]), isBlackOrientation), pieceMatch[1] + pieceMatch[2]);
   }
 
-  if (!squares.size) throw new Error('Board found but pieces could not be read.');
+  if (!squares.size) {
+    throw new Error('The board was found, but its pieces could not be read. Open a visible game or analysis board.');
+  }
 
   const rows = [];
   for (let rank = 8; rank >= 1; rank -= 1) {
@@ -59,78 +65,6 @@ function capturePosition() {
   return { fen: `${rows.join('/')} ${sideToMove} - - 0 1`, source: 'Chess.com board pieces' };
 }
 
-function squareToCoords(square) {
-  const board = findBoard();
-  if (!board) return null;
-  const rect = board.getBoundingClientRect();
-  const file = square.charCodeAt(0) - 97;
-  const rank = parseInt(square[1]) - 1;
-  const isBlack = /orientation-black/.test(board.className) || /orientation-black/.test(board.parentElement?.className || '');
-  const f = isBlack ? 7 - file : file;
-  const r = isBlack ? rank : 7 - rank;
-  const sqW = rect.width / 8;
-  const sqH = rect.height / 8;
-  return {
-    x: rect.left + f * sqW + sqW / 2 + window.scrollX,
-    y: rect.top + r * sqH + sqH / 2 + window.scrollY,
-    w: sqW,
-    h: sqH
-  };
-}
-
-function drawArrow(fromSq, toSq, color = '#ff6b35') {
-  removeArrow();
-  const from = squareToCoords(fromSq);
-  const to = squareToCoords(toSq);
-  if (!from || !to) return;
-
-  arrowOverlay = document.createElement('div');
-  arrowOverlay.id = 'chess-ext-arrow';
-  arrowOverlay.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:99999;';
-
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('width', '100%');
-  svg.setAttribute('height', '100%');
-  svg.style.cssText = 'position:absolute;top:0;left:0;';
-
-  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-  const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
-  marker.setAttribute('id', 'arrowhead');
-  marker.setAttribute('markerWidth', '10');
-  marker.setAttribute('markerHeight', '8');
-  marker.setAttribute('refX', '9');
-  marker.setAttribute('refY', '4');
-  marker.setAttribute('orient', 'auto');
-  const polygon = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
-  polygon.setAttribute('points', '0 0, 10 4, 0 8');
-  polygon.setAttribute('fill', color);
-  marker.appendChild(polygon);
-  defs.appendChild(marker);
-  svg.appendChild(defs);
-
-  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-  line.setAttribute('x1', from.x);
-  line.setAttribute('y1', from.y);
-  line.setAttribute('x2', to.x);
-  line.setAttribute('y2', to.y);
-  line.setAttribute('stroke', color);
-  line.setAttribute('stroke-width', Math.max(from.w * 0.2, 6));
-  line.setAttribute('stroke-linecap', 'round');
-  line.setAttribute('marker-end', 'url(#arrowhead)');
-  line.setAttribute('opacity', '0.85');
-  svg.appendChild(line);
-
-  arrowOverlay.appendChild(svg);
-  document.body.appendChild(arrowOverlay);
-}
-
-function removeArrow() {
-  if (arrowOverlay) {
-    arrowOverlay.remove();
-    arrowOverlay = null;
-  }
-}
-
 function sendFenUpdate() {
   try {
     const position = capturePosition();
@@ -139,30 +73,92 @@ function sendFenUpdate() {
       chrome.runtime.sendMessage({ type: 'board-update', fen: position.fen });
     }
   } catch (error) {
-    console.error('Chess extension:', error.message);
+    console.error('Chess extension error:', error.message);
   }
 }
 
+function showCoords() {
+  if (coordsOverlay) return;
+  const board = findBoard();
+  if (!board) return;
+  const rect = board.getBoundingClientRect();
+  const isBlackOrientation = /orientation-black/.test(board.className) || /orientation-black/.test(board.parentElement?.className || '');
+
+  coordsOverlay = document.createElement('div');
+  coordsOverlay.className = 'chess-ext-coords';
+  coordsOverlay.style.cssText = 'position:fixed;pointer-events:none;z-index:99999;left:' + rect.left + 'px;top:' + rect.top + 'px;width:' + rect.width + 'px;height:' + rect.height + 'px;';
+
+  const files = isBlackOrientation ? 'hgfedcba' : 'abcdefgh';
+  const ranks = isBlackOrientation ? '12345678' : '87654321';
+  const sqSize = rect.width / 8;
+
+  for (let i = 0; i < 8; i++) {
+    const fileLabel = document.createElement('span');
+    fileLabel.textContent = files[i];
+    fileLabel.style.cssText = 'position:absolute;font:bold 10px sans-serif;color:rgba(0,0,0,0.5);text-shadow:0 0 2px rgba(255,255,255,0.8);bottom:1px;transform:translateX(-50%);left:' + (i * sqSize + sqSize / 2) + 'px;';
+    if (i % 2 === 1) fileLabel.style.color = 'rgba(255,255,255,0.6)';
+    coordsOverlay.appendChild(fileLabel);
+
+    const rankLabel = document.createElement('span');
+    rankLabel.textContent = ranks[i];
+    rankLabel.style.cssText = 'position:absolute;font:bold 10px sans-serif;color:rgba(0,0,0,0.5);text-shadow:0 0 2px rgba(255,255,255,0.8);top:1px;transform:translateX(-50%);left:' + (i * sqSize + sqSize / 2) + 'px;';
+    if (i % 2 === 0) rankLabel.style.color = 'rgba(255,255,255,0.6)';
+    coordsOverlay.appendChild(rankLabel);
+  }
+
+  for (let i = 0; i < 8; i++) {
+    const rankLabel = document.createElement('span');
+    rankLabel.textContent = ranks[i];
+    rankLabel.style.cssText = 'position:absolute;font:bold 10px sans-serif;color:rgba(0,0,0,0.5);text-shadow:0 0 2px rgba(255,255,255,0.8);left:2px;transform:translateY(-50%);top:' + (i * sqSize + sqSize / 2) + 'px;';
+    if (i % 2 === 1) rankLabel.style.color = 'rgba(255,255,255,0.6)';
+    coordsOverlay.appendChild(rankLabel);
+  }
+
+  document.body.appendChild(coordsOverlay);
+  coordsVisible = true;
+}
+
+function hideCoords() {
+  if (coordsOverlay) {
+    coordsOverlay.remove();
+    coordsOverlay = null;
+  }
+  coordsVisible = false;
+}
+
+function toggleCoords() {
+  if (coordsVisible) hideCoords();
+  else showCoords();
+}
+
 function startObserving() {
-  if (monitoring) return;
+  if (observer) return;
+
   const board = findBoard();
   if (!board) {
     setTimeout(startObserving, 1000);
     return;
   }
+
   observer = new MutationObserver(() => sendFenUpdate());
   observer.observe(board, { attributes: true, childList: true, subtree: true, attributeFilter: ['class', 'data-fen'] });
-  monitoring = true;
+
   sendFenUpdate();
+  console.log('Chess extension: monitoring board changes');
 }
 
 function stopObserving() {
   if (observer) {
     observer.disconnect();
     observer = null;
+    console.log('Chess extension: stopped monitoring');
   }
-  monitoring = false;
-  removeArrow();
+}
+
+function refreshCoords() {
+  if (!coordsVisible) return;
+  hideCoords();
+  showCoords();
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -187,17 +183,26 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === 'draw-arrow') {
-    if (message.from && message.to) {
-      drawArrow(message.from, message.to, message.color);
-    } else {
-      removeArrow();
-    }
+  if (message.type === 'toggle-coords') {
+    toggleCoords();
+    sendResponse({ ok: true });
+    return true;
+  }
+
+  if (message.type === 'update-coords') {
+    if (message.visible && !coordsVisible) showCoords();
+    else if (!message.visible && coordsVisible) hideCoords();
     sendResponse({ ok: true });
     return true;
   }
 
   return undefined;
+});
+
+chrome.storage.local.get('coords', (data) => {
+  if (data.coords !== false) {
+    setTimeout(showCoords, 500);
+  }
 });
 
 startObserving();

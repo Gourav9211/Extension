@@ -14,7 +14,9 @@
           <p class="eyebrow">LIVE ASSISTANT</p>
           <h1>Best move</h1>
         </div>
-        <button id="dark-toggle" class="icon-btn" type="button" title="Toggle dark mode">&#9790;</button>
+        <div class="header-btns">
+          <button id="dark-toggle" class="icon-btn" type="button" title="Toggle dark mode">&#9790;</button>
+        </div>
       </div>
       <p class="muted">Monitoring your game in real-time.</p>
     </header>
@@ -38,6 +40,11 @@
       <span id="opening-name"></span>
     </div>
 
+    <div id="classification-banner" class="classification-banner" hidden>
+      <span id="classify-icon"></span>
+      <span id="classify-text"></span>
+    </div>
+
     <section id="result" hidden>
       <div class="moves-section">
         <div class="move-row primary">
@@ -57,7 +64,20 @@
       <p>Open a game on Chess.com and start playing.</p>
     </section>
 
+    <div id="graph-section" class="graph-section" hidden>
+      <canvas id="eval-graph" width="340" height="60"></canvas>
+    </div>
+
+    <div id="history-section" class="history-section" hidden>
+      <div class="history-header">
+        <span class="history-title">Move History</span>
+        <span id="accuracy-badge" class="accuracy-badge" hidden></span>
+      </div>
+      <div id="move-history" class="move-history"></div>
+    </div>
+
     <footer>
+      <button id="save-game" class="secondary" type="button">Save Game</button>
       <button id="export-pgn" class="secondary" type="button">Export PGN</button>
       <button id="settings" class="secondary" type="button">Settings</button>
     </footer>

@@ -1,5 +1,144 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Chess Position Analyst settings</title><link rel="stylesheet" href="popup.css"></head>
-<body><main><p class="eyebrow">SETTINGS</p><h1>Gemini API key</h1><p class="muted">Stored locally in this browser profile and used only for explanations.</p><label for="key">API key</label><input id="key" type="password" autocomplete="off"><button id="save" type="button">Save key</button><p id="status" class="status" role="status"></p></main><script src="options.js"></script></body>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chess Analyst Settings</title>
+  <style>
+    :root { color-scheme: light; font-family: Georgia, serif; background: #f5f1e8; color: #1d2824; }
+    body.dark { background: #1a1d1b; color: #e0e0e0; }
+    * { box-sizing: border-box; }
+    body { max-width: 520px; margin: 0 auto; padding: 24px; }
+    h1 { margin: 0 0 24px; font-size: 24px; }
+    .section { margin-bottom: 24px; padding: 16px; background: #eae6dd; border-radius: 8px; }
+    body.dark .section { background: #2a2d2b; }
+    .section h2 { margin: 0 0 12px; font-size: 14px; text-transform: uppercase; letter-spacing: 1px; color: #687a55; }
+    .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .row:last-child { margin-bottom: 0; }
+    .row label { font: 14px/1.4 sans-serif; }
+    .row input[type="number"], .row input[type="text"], .row select {
+      width: 80px; padding: 6px 8px; border: 1px solid #c8d0c3; border-radius: 4px;
+      font: 14px/1 sans-serif; background: #fff; color: #1d2824;
+    }
+    body.dark .row input, body.dark .row select { background: #333; color: #e0e0e0; border-color: #555; }
+    .row input[type="text"] { width: 100%; }
+    textarea { width: 100%; min-height: 80px; padding: 8px; border: 1px solid #c8d0c3; border-radius: 4px;
+      font: 13px/1.4 sans-serif; resize: vertical; background: #fff; color: #1d2824; }
+    body.dark textarea { background: #333; color: #e0e0e0; border-color: #555; }
+    .toggle { position: relative; width: 40px; height: 22px; }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle .slider { position: absolute; inset: 0; background: #ccc; border-radius: 11px; cursor: pointer; transition: .2s; }
+    .toggle .slider:before { content: ''; position: absolute; width: 16px; height: 16px; left: 3px; top: 3px;
+      background: #fff; border-radius: 50%; transition: .2s; }
+    .toggle input:checked + .slider { background: #263d32; }
+    .toggle input:checked + .slider:before { transform: translateX(18px); }
+    .btn { padding: 10px 16px; border: 0; border-radius: 6px; background: #263d32; color: #fffdf7;
+      font: 700 13px sans-serif; cursor: pointer; }
+    .btn:hover { background: #3f624f; }
+    .btn.secondary { background: transparent; border: 1px solid #a8b4a2; color: #263d32; }
+    body.dark .btn.secondary { color: #ccc; border-color: #555; }
+    .status { font: 12px/1 sans-serif; color: #65716b; margin-top: 8px; }
+    .archive-item { padding: 8px 12px; border-bottom: 1px solid #d4d0c7; font: 13px/1.4 sans-serif; cursor: pointer; }
+    .archive-item:hover { background: #d9e6d2; }
+    body.dark .archive-item { border-color: #444; }
+    body.dark .archive-item:hover { background: #333; }
+    .archive-item .date { color: #687a55; font-weight: 700; }
+    .archive-item .moves { color: #65716b; }
+    .archive-list { max-height: 300px; overflow-y: auto; }
+    .empty { color: #999; font-style: italic; padding: 12px 0; }
+  </style>
+</head>
+<body>
+  <h1>Settings</h1>
+
+  <div class="section">
+    <h2>Engine</h2>
+    <div class="row">
+      <label>Analysis depth</label>
+      <input id="depth" type="number" min="10" max="25" value="18">
+    </div>
+    <div class="row">
+      <label>Multi-PV (lines)</label>
+      <select id="multiPv">
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="3" selected>3</option>
+        <option value="4">4</option>
+        <option value="5">5</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>UI</h2>
+    <div class="row">
+      <label>Sound notification</label>
+      <label class="toggle"><input type="checkbox" id="sound" checked><span class="slider"></span></label>
+    </div>
+    <div class="row">
+      <label>Dark mode</label>
+      <label class="toggle"><input type="checkbox" id="darkMode"><span class="slider"></span></label>
+    </div>
+    <div class="row">
+      <label>Board coordinates</label>
+      <label class="toggle"><input type="checkbox" id="coords" checked><span class="slider"></span></label>
+    </div>
+    <div class="row">
+      <label>Win probability graph</label>
+      <label class="toggle"><input type="checkbox" id="graph" checked><span class="slider"></span></label>
+    </div>
+    <div class="row">
+      <label>Move history panel</label>
+      <label class="toggle"><input type="checkbox" id="history" checked><span class="slider"></span></label>
+    </div>
+    <div class="row">
+      <label>Move classification labels</label>
+      <label class="toggle"><input type="checkbox" id="classify" checked><span class="slider"></span></label>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Gemini AI</h2>
+    <div class="row">
+      <label>API key</label>
+      <input id="geminiKey" type="password" style="width:200px" autocomplete="off">
+    </div>
+    <div class="row">
+      <label>Custom prompt</label>
+    </div>
+    <textarea id="geminiPrompt" placeholder="Leave blank for default prompt..."></textarea>
+  </div>
+
+  <div class="section">
+    <h2>FEN Analyzer</h2>
+    <div class="row">
+      <label>Paste a FEN to analyze</label>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <input id="fenInput" type="text" style="flex:1;padding:6px 8px;border:1px solid #c8d0c3;border-radius:4px;font:13px monospace" placeholder="rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1">
+      <button class="btn" id="analyzeFen">Analyze</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Game Archive</h2>
+    <div id="archiveList" class="archive-list">
+      <div class="empty">No saved games yet.</div>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn secondary" id="exportAll">Export all PGN</button>
+      <button class="btn secondary" id="clearArchive">Clear archive</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Accuracy</h2>
+    <div id="accuracyStats">
+      <div class="empty">Play and analyze games to see your accuracy score.</div>
+    </div>
+  </div>
+
+  <p class="status" id="status"></p>
+  <script src="options.js"></script>
+</body>
 </html>
