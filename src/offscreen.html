@@ -2,7 +2,20 @@
 <html>
 <head><title>Stockfish Engine</title></head>
 <body>
+<script>
+var Module = {
+  print: function(text) { chrome.runtime.sendMessage({ type: 'sf-line', text: text }).catch(function(){}); },
+  printErr: function(text) { console.error('SF:', text); },
+  locateFile: function(path) { return chrome.runtime.getURL('engine/' + path); },
+  noInitialRun: true,
+  noExitRuntime: true
+};
+chrome.runtime.onMessage.addListener(function(message) {
+  if (message.type === 'sf-cmd' && typeof Module._uci_command === 'function') {
+    Module._uci_command(message.cmd);
+  }
+});
+</script>
 <script src="../engine/stockfish.js"></script>
-<script src="offscreen.js"></script>
 </body>
 </html>
