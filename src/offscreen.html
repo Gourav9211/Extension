@@ -4,18 +4,33 @@
 <body>
 <script>
 var Module = {
-  print: function(text) { chrome.runtime.sendMessage({ type: 'sf-line', text: text }).catch(function(){}); },
-  printErr: function(text) { console.error('SF:', text); },
-  locateFile: function(path) { return chrome.runtime.getURL('engine/' + path); },
+  print: function(text) {
+    chrome.runtime.sendMessage({ type: 'sf-line', text: text }).catch(function() {});
+  },
+  printErr: function(text) {},
+  locateFile: function(path) {
+    return chrome.runtime.getURL('engine/' + path);
+  },
   noInitialRun: true,
   noExitRuntime: true
 };
-chrome.runtime.onMessage.addListener(function(message) {
-  if (message.type === 'sf-cmd' && typeof Module._uci_command === 'function') {
-    Module._uci_command(message.cmd);
+
+chrome.runtime.onMessage.addListener(function(message, _sender, sendResponse) {
+  if (message.type === 'sf-cmd') {
+    if (typeof Module._uci_command === 'function') {
+      Module._uci_command(message.cmd);
+      sendResponse({ ok: true });
+    } else {
+      sendResponse({ ok: false, error: 'Engine not ready' });
+    }
+    return true;
   }
 });
 </script>
 <script src="../engine/stockfish.js"></script>
+<script>
+try { Module._main(); } catch(e) {}
+chrome.runtime.sendMessage({ type: 'sf-engine-loaded' }).catch(function() {});
+</script>
 </body>
 </html>

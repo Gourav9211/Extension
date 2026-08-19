@@ -8,13 +8,12 @@ let positionCache = new Map();
 let gameHistory = [];
 let offscreenCreated = false;
 let engineReady = false;
-let engineReadyPromise = null;
-let engineReadyResolve = null;
+let engineReadyWaiters = [];
 let pendingEval = null;
 
 const OPENINGS = {
-  'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR': 'King\'s Pawn',
-  'rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR': 'Queen\'s Pawn',
+  'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR': "King's Pawn",
+  'rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR': "Queen's Pawn",
   'rnbqkbnr/pppppppp/8/8/2P5/8/PP1PPPPP/RNBQKBNR': 'English',
   'rnbqkbnr/pppppppp/8/8/8/5N2/PPPPPPPP/RNBQKB1R': 'Reti',
   'rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR': 'Open Game',
@@ -27,10 +26,35 @@ const OPENINGS = {
 
 function validateFen(fen) {
   const fields = fen.trim().split(/\s+/);
-  if (fields.length < 4) throw new Error('Invalid FEN');
-  if (!/^[prnbqkPRNBQK1-8/]+$/.test(fields[0]) || fields[0].split('/').length !== 8) {
-    throw new Error('Invalid FEN board');
+  if (fields.length < 4) {
+    throw new Error('Invalid FEN: expected at least 5 fields, got ' + fields.length);
   }
+
+  const ranks = fields[0].split('/');
+  if (ranks.length !== 8) {
+    throw new Error('Invalid FEN: expected 8 ranks, got ' + ranks.length);
+  }
+
+  for (let i = 0; i < ranks.length; i++) {
+    let squares = 0;
+    for (const ch of ranks[i]) {
+      if (ch >= '1' && ch <= '8') {
+        squares += parseInt(ch);
+      } else if ('prnbqkPRNBQK'.includes(ch)) {
+        squares += 1;
+      } else {
+        throw new Error('Invalid FEN: bad character "' + ch + '" in rank ' + (i + 1));
+      }
+    }
+    if (squares !== 8) {
+      throw new Error('Invalid FEN: rank ' + (i + 1) + ' has ' + squares + ' squares, expected 8');
+    }
+  }
+
+  if (fields[1] !== 'w' && fields[1] !== 'b') {
+    throw new Error('Invalid FEN: side to move must be "w" or "b", got "' + fields[1] + '"');
+  }
+
   return fields.join(' ');
 }
 
@@ -69,37 +93,42 @@ async function ensureOffscreen() {
   }
 }
 
-function waitForEngine(timeoutMs = 10000) {
+function waitForEngine(timeoutMs = 15000) {
   if (engineReady) return Promise.resolve();
-  if (engineReadyPromise) return engineReadyPromise;
-  engineReadyPromise = new Promise((resolve, reject) => {
-    engineReadyResolve = resolve;
-    setTimeout(() => reject(new Error('Engine init timeout')), timeoutMs);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      const idx = engineReadyWaiters.indexOf(waiter);
+      if (idx !== -1) engineReadyWaiters.splice(idx, 1);
+      reject(new Error('Engine init timeout'));
+    }, timeoutMs);
+    const waiter = { resolve: () => { clearTimeout(timer); resolve(); }, reject };
+    engineReadyWaiters.push(waiter);
   });
-  return engineReadyPromise;
 }
 
 function sfCommand(cmd) {
   chrome.runtime.sendMessage({ type: 'sf-cmd', cmd }).catch(() => {});
 }
 
-function evaluateWithStockfish(fen, multiPv = 3) {
+function evaluateWithStockfish(fen, multiPv) {
   return new Promise((resolve, reject) => {
     if (pendingEval) {
-      pendingEval.reject(new Error('Superseded'));
+      const old = pendingEval;
+      pendingEval = null;
+      clearTimeout(old.timeout);
+      old.reject(new Error('Superseded by new request'));
     }
 
-    const info = { lines: [], bestMove: null, resolve, reject };
+    const info = { lines: [], resolve, reject, timeout: null };
     pendingEval = info;
 
-    const timeout = setTimeout(() => {
+    info.timeout = setTimeout(() => {
       if (pendingEval === info) {
         pendingEval = null;
         reject(new Error('Engine evaluation timeout'));
       }
     }, 30000);
 
-    info.timeout = timeout;
     sfCommand('stop');
     sfCommand('ucinewgame');
     sfCommand('position fen ' + fen);
@@ -110,10 +139,8 @@ function evaluateWithStockfish(fen, multiPv = 3) {
 function processEngineLine(text) {
   if (text === 'uciok') {
     engineReady = true;
-    if (engineReadyResolve) {
-      engineReadyResolve();
-      engineReadyResolve = null;
-    }
+    for (const w of engineReadyWaiters) w.resolve();
+    engineReadyWaiters = [];
     return;
   }
 
@@ -125,17 +152,14 @@ function processEngineLine(text) {
     const move = text.split(' ')[1];
     const parsed = parseInfoLines(info.lines);
     if (!parsed.length && move) {
-      parsed.push({ move, line: move, evaluation: null, mate: null, depth: null });
+      parsed.push({ move: move, line: move, evaluation: null, mate: null, depth: null });
     }
     info.resolve({ bestMove: move, moves: parsed });
     return;
   }
 
-  if (text.startsWith('info') && pendingEval) {
-    const line = text;
-    if (line.includes(' pv ')) {
-      pendingEval.lines.push(line);
-    }
+  if (text.startsWith('info ') && pendingEval && text.includes(' pv ')) {
+    pendingEval.lines.push(text);
   }
 }
 
@@ -151,10 +175,10 @@ function parseInfoLines(lines) {
     if (seen.has(move)) continue;
     seen.add(move);
     result.push({
-      move,
+      move: move,
       line: pvMatch[1],
-      evaluation: scoreMatch?.[1] === 'cp' ? parseInt(scoreMatch[2]) : null,
-      mate: scoreMatch?.[1] === 'mate' ? parseInt(scoreMatch[2]) : null,
+      evaluation: scoreMatch && scoreMatch[1] === 'cp' ? parseInt(scoreMatch[2]) : null,
+      mate: scoreMatch && scoreMatch[1] === 'mate' ? parseInt(scoreMatch[2]) : null,
       depth: depthMatch ? parseInt(depthMatch[1]) : null
     });
   }
@@ -173,36 +197,47 @@ async function explainWithGemini(fen, engine) {
     'Explain in 2-3 sentences why it is strong.'
   ].join('\n');
   try {
-    const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiApiKey },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-    });
+    const response = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/' + GEMINI_MODEL + ':generateContent',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': geminiApiKey },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+      }
+    );
     if (!response.ok) return 'Explanation unavailable.';
     const data = await response.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || 'No explanation.';
-  } catch { return 'Explanation unavailable.'; }
+    return (data.candidates && data.candidates[0] && data.candidates[0].content &&
+      data.candidates[0].content.parts && data.candidates[0].content.parts[0] &&
+      data.candidates[0].content.parts[0].text) || 'No explanation.';
+  } catch (e) {
+    return 'Explanation unavailable.';
+  }
 }
 
 async function analyzePosition(fen) {
   await waitForEngine();
-  const cached = getCached(fen);
-  const engine = cached || await evaluateWithStockfish(fen, 3);
-  if (!cached) setCache(fen, engine);
+  const validated = validateFen(fen);
+  const cached = getCached(validated);
+  const engine = cached || await evaluateWithStockfish(validated, 3);
+  if (!cached) setCache(validated, engine);
 
   let explanation = null;
-  try { explanation = await explainWithGemini(fen, engine); }
-  catch { explanation = 'Explanation unavailable.'; }
+  try {
+    explanation = await explainWithGemini(validated, engine);
+  } catch (e) {
+    explanation = 'Explanation unavailable.';
+  }
 
-  const opening = detectOpening(fen);
-  gameHistory.push({ fen, bestMove: engine.moves[0].move, timestamp: Date.now() });
+  const opening = detectOpening(validated);
+  gameHistory.push({ fen: validated, bestMove: engine.moves[0].move, timestamp: Date.now() });
   if (gameHistory.length > 200) gameHistory = gameHistory.slice(-200);
 
-  return { ok: true, engine, explanation, opening };
+  return { ok: true, engine: engine, explanation: explanation, opening: opening };
 }
 
 function sendAnalysisToPopup(result) {
-  chrome.runtime.sendMessage({ type: 'analysis-result', ...result }).catch(() => {});
+  chrome.runtime.sendMessage(Object.assign({ type: 'analysis-result' }, result)).catch(() => {});
 }
 
 async function handleBoardUpdate(fen) {
@@ -213,7 +248,7 @@ async function handleBoardUpdate(fen) {
       sendAnalysisToPopup(result);
       const bestMove = result.engine.moves[0].move;
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0]?.id) {
+        if (tabs[0] && tabs[0].id) {
           chrome.tabs.sendMessage(tabs[0].id, {
             type: 'draw-arrow',
             from: bestMove.substring(0, 2),
@@ -230,8 +265,15 @@ async function handleBoardUpdate(fen) {
 
 function generatePGN() {
   if (!gameHistory.length) return '';
-  let pgn = '[Event Live Analysis]\n[Site Chess Analyst]\n[Date  + new Date().toISOString().split(T)[0] + ]\n[White User]\n[Black Engine]\n\n';
-  const moves = gameHistory.filter(g => g.bestMove);
+  const dateStr = new Date().toISOString().split('T')[0];
+  let pgn = '';
+  pgn += '[Event "Live Analysis"]\n';
+  pgn += '[Site "Chess Analyst"]\n';
+  pgn += '[Date "' + dateStr + '"]\n';
+  pgn += '[White "User"]\n';
+  pgn += '[Black "Engine"]\n';
+  pgn += '\n';
+  const moves = gameHistory.filter(function(g) { return g.bestMove; });
   for (let i = 0; i < moves.length; i++) {
     if (i % 2 === 0) pgn += (Math.floor(i / 2) + 1) + '. ';
     pgn += moves[i].bestMove + ' ';
@@ -245,10 +287,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === 'sf-engine-loaded') {
+    if (!engineReady) {
+      sfCommand('uci');
+    }
+    return false;
+  }
+
   if (message.type === 'analyze-position') {
     (async () => {
-      try { sendResponse(await analyzePosition(message.fen)); }
-      catch (error) { sendResponse({ ok: false, error: error.message }); }
+      try {
+        sendResponse(await analyzePosition(message.fen));
+      } catch (error) {
+        sendResponse({ ok: false, error: error.message });
+      }
     })();
     return true;
   }
@@ -277,8 +329,10 @@ chrome.commands.onCommand.addListener((command) => {
       const newState = !monitoring;
       chrome.storage.local.set({ monitoring: newState });
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0]?.id) {
-          chrome.tabs.sendMessage(tabs[0].id, { type: newState ? 'start-monitoring' : 'stop-monitoring' }).catch(() => {});
+        if (tabs[0] && tabs[0].id) {
+          chrome.tabs.sendMessage(tabs[0].id, {
+            type: newState ? 'start-monitoring' : 'stop-monitoring'
+          }).catch(() => {});
         }
       });
       chrome.runtime.sendMessage({ type: 'monitoring-toggled', monitoring: newState }).catch(() => {});
@@ -289,19 +343,16 @@ chrome.commands.onCommand.addListener((command) => {
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   try {
     const tab = await chrome.tabs.get(activeInfo.tabId);
-    if (tab.url?.includes('chess.com')) {
+    if (tab.url && tab.url.includes('chess.com')) {
       chrome.tabs.sendMessage(activeInfo.tabId, { type: 'start-monitoring' }).catch(() => {});
     }
-  } catch {}
+  } catch (e) {}
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status === 'complete' && tab.url?.includes('chess.com')) {
+  if (changeInfo.status === 'complete' && tab.url && tab.url.includes('chess.com')) {
     chrome.tabs.sendMessage(tabId, { type: 'start-monitoring' }).catch(() => {});
   }
 });
 
-(async () => {
-  await ensureOffscreen();
-  sfCommand('uci');
-})();
+ensureOffscreen();
