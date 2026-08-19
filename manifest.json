@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Chess Position Analyst",
+  "version": "0.1.0",
+  "description": "Capture a Chess.com board, find a strong move, and explain it with Gemini.",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": ["https://lichess.org/*", "https://generativelanguage.googleapis.com/*"],
+  "background": {
+    "service_worker": "src/service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Analyze chess position",
+    "default_popup": "src/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.chess.com/*", "https://chess.com/*"],
+      "js": ["src/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "src/options.html"
+}
