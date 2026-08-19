@@ -11,16 +11,35 @@
     <header>
       <p class="eyebrow">POST-GAME TOOL</p>
       <h1>Position analyst</h1>
-      <p class="muted">Capture the visible Chess.com board and inspect a strong continuation.</p>
+      <p class="muted">Capture the visible board and inspect a strong continuation.</p>
     </header>
+
+    <div id="status-bar" class="status-bar">
+      <span class="dot"></span>
+      <span id="status-text">Ready.</span>
+    </div>
+
     <button id="analyze" type="button">Analyze position</button>
-    <button id="settings" class="secondary" type="button">Set Gemini API key</button>
-    <p id="status" class="status" role="status">Ready.</p>
+
     <section id="result" hidden>
-      <div class="move-row"><span>Recommended move</span><strong id="move">--</strong></div>
+      <div class="move-row">
+        <span>Recommended move</span>
+        <strong id="move">--</strong>
+      </div>
       <p id="engine"></p>
-      <div class="explanation"><h2>Why it works</h2><p id="explanation"></p></div>
+      <div class="explanation">
+        <h2>Why</h2>
+        <p id="explanation"></p>
+      </div>
     </section>
+
+    <section id="no-game" class="empty-state">
+      <p>Open a completed game or analysis board on Chess.com.</p>
+    </section>
+
+    <footer>
+      <button id="settings" class="secondary" type="button">Settings</button>
+    </footer>
   </main>
   <script src="popup.js"></script>
 </body>

@@ -61,11 +61,14 @@ function capturePosition() {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message.type !== 'capture-position') return undefined;
-  try {
-    sendResponse({ ok: true, position: capturePosition() });
-  } catch (error) {
-    sendResponse({ ok: false, error: error.message });
+  if (message.type === 'capture-position') {
+    try {
+      sendResponse({ ok: true, position: capturePosition() });
+    } catch (error) {
+      sendResponse({ ok: false, error: error.message });
+    }
+    return true;
   }
-  return true;
+
+  return undefined;
 });
