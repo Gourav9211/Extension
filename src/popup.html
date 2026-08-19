@@ -9,22 +9,42 @@
 <body>
   <main>
     <header>
-      <p class="eyebrow">POST-GAME TOOL</p>
-      <h1>Position analyst</h1>
-      <p class="muted">Capture the visible board and inspect a strong continuation.</p>
+      <div class="header-row">
+        <div>
+          <p class="eyebrow">LIVE ASSISTANT</p>
+          <h1>Best move</h1>
+        </div>
+        <button id="dark-toggle" class="icon-btn" type="button" title="Toggle dark mode">&#9790;</button>
+      </div>
+      <p class="muted">Monitoring your game in real-time.</p>
     </header>
+
+    <div class="eval-bar-container" id="eval-container" hidden>
+      <div class="eval-label" id="eval-label">0.0</div>
+      <div class="eval-bar">
+        <div class="eval-fill" id="eval-fill"></div>
+      </div>
+      <div class="eval-sides"><span>&#9812;</span><span>&#9814;</span></div>
+    </div>
 
     <div id="status-bar" class="status-bar">
       <span class="dot"></span>
-      <span id="status-text">Ready.</span>
+      <span id="status-text">Waiting for game...</span>
+      <span class="shortcut-hint">Ctrl+Shift+A</span>
     </div>
 
-    <button id="analyze" type="button">Analyze position</button>
+    <div id="opening-banner" class="opening-banner" hidden>
+      <span class="opening-icon">&#9816;</span>
+      <span id="opening-name"></span>
+    </div>
 
     <section id="result" hidden>
-      <div class="move-row">
-        <span>Recommended move</span>
-        <strong id="move">--</strong>
+      <div class="moves-section">
+        <div class="move-row primary">
+          <span>Play</span>
+          <strong id="move">--</strong>
+        </div>
+        <div class="alt-moves" id="alt-moves"></div>
       </div>
       <p id="engine"></p>
       <div class="explanation">
@@ -34,10 +54,11 @@
     </section>
 
     <section id="no-game" class="empty-state">
-      <p>Open a completed game or analysis board on Chess.com.</p>
+      <p>Open a game on Chess.com and start playing.</p>
     </section>
 
     <footer>
+      <button id="export-pgn" class="secondary" type="button">Export PGN</button>
       <button id="settings" class="secondary" type="button">Settings</button>
     </footer>
   </main>

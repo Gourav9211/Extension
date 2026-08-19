@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Chess Position Analyst",
-  "version": "0.1.0",
-  "description": "Capture a Chess.com board, find a strong move, and explain it with Gemini.",
-  "permissions": ["storage", "activeTab"],
-  "host_permissions": ["https://lichess.org/*", "https://generativelanguage.googleapis.com/*"],
+  "version": "0.2.0",
+  "description": "Real-time chess analysis with engine eval, AI explanations, and board highlights.",
+  "permissions": ["storage", "activeTab", "commands", "downloads"],
+  "host_permissions": ["https://lichess.org/*", "https://explorer.lichess.ovh/*", "https://generativelanguage.googleapis.com/*"],
   "background": {
     "service_worker": "src/service-worker.js",
     "type": "module"
@@ -20,5 +20,14 @@
       "run_at": "document_idle"
     }
   ],
+  "commands": {
+    "toggle-analysis": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+A",
+        "mac": "Command+Shift+A"
+      },
+      "description": "Toggle live analysis"
+    }
+  },
   "options_page": "src/options.html"
 }
