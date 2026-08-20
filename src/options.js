@@ -8,7 +8,7 @@ const DEFAULTS = {
   graph: true,
   history: true,
   classify: true,
-  geminiKey: '',
+  geminiApiKey: '',
   geminiPrompt: '',
   debounceMs: 500
 };
@@ -43,6 +43,7 @@ async function saveSettings() {
   await chrome.storage.local.set(settings);
   if (settings.darkMode) document.body.classList.add('dark');
   else document.body.classList.remove('dark');
+  chrome.runtime.sendMessage({ type: 'monitoring-toggled', darkMode: settings.darkMode }).catch(function() {});
   setStatus('Settings saved.');
 }
 

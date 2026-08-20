@@ -2,6 +2,7 @@ let lastFen = '';
 let observer = null;
 let coordsOverlay = null;
 let coordsVisible = false;
+let observeRetryTimer = null;
 
 function findBoard() {
   return document.querySelector('[data-board], .board, chess-board, [class*="board"]');
@@ -133,10 +134,11 @@ function toggleCoords() {
 
 function startObserving() {
   if (observer) return;
+  if (observeRetryTimer) { clearTimeout(observeRetryTimer); observeRetryTimer = null; }
 
   const board = findBoard();
   if (!board) {
-    setTimeout(startObserving, 1000);
+    observeRetryTimer = setTimeout(startObserving, 1000);
     return;
   }
 
@@ -148,6 +150,7 @@ function startObserving() {
 }
 
 function stopObserving() {
+  if (observeRetryTimer) { clearTimeout(observeRetryTimer); observeRetryTimer = null; }
   if (observer) {
     observer.disconnect();
     observer = null;

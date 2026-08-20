@@ -24,6 +24,8 @@ const classifyText = document.querySelector('#classify-text');
 let audioCtx = null;
 let evalHistory = [];
 let settings = { sound: true, coords: true, graph: true, history: true, classify: true };
+let graphRafPending = false;
+let latestEvals = null;
 
 function setStatus(text, active) {
   statusText.textContent = text;
@@ -99,12 +101,7 @@ function renderClassification(cls) {
   classifyText.style.color = colors[cls] || '#999';
 }
 
-function renderGraph(evals) {
-  if (!settings.graph || evals.length < 2) {
-    graphSection.hidden = true;
-    return;
-  }
-  graphSection.hidden = false;
+function drawGraph(evals) {
   const ctx = graphCanvas.getContext('2d');
   const w = graphCanvas.width;
   const h = graphCanvas.height;
@@ -119,7 +116,6 @@ function renderGraph(evals) {
   ctx.fillRect(0, 0, w, h);
 
   ctx.beginPath();
-  ctx.moveTo(0, h / 2);
   for (let i = 0; i < validEvals.length; i++) {
     const x = (i / (validEvals.length - 1)) * w;
     const y = h / 2 - (validEvals[i] / 1000) * (h / 2);
@@ -135,13 +131,28 @@ function renderGraph(evals) {
   for (let i = 0; i < validEvals.length; i++) {
     const x = (i / (validEvals.length - 1)) * w;
     const y = h / 2 - (validEvals[i] / 1000) * (h / 2);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+    ctx.lineTo(x, y);
   }
   ctx.lineTo(w, h / 2);
   ctx.lineTo(0, h / 2);
   ctx.fillStyle = validEvals[validEvals.length - 1] > 0 ? 'rgba(38,61,50,0.15)' : 'rgba(192,57,43,0.15)';
   ctx.fill();
+}
+
+function renderGraph(evals) {
+  if (!settings.graph || evals.length < 2) {
+    graphSection.hidden = true;
+    return;
+  }
+  graphSection.hidden = false;
+  latestEvals = evals;
+  if (!graphRafPending) {
+    graphRafPending = true;
+    requestAnimationFrame(function() {
+      graphRafPending = false;
+      if (latestEvals) drawGraph(latestEvals);
+    });
+  }
 }
 
 function renderMoveHistory(history) {
@@ -184,17 +195,19 @@ function renderMoveHistory(history) {
 
 function calculateAccuracyFromHistory(history) {
   if (history.length < 2) return null;
-  let totalDiff = 0;
+  let totalScore = 0;
   let count = 0;
   for (let i = 1; i < history.length; i++) {
     const prev = history[i - 1].eval;
     const curr = history[i].eval;
     if (prev != null && curr != null) {
-      totalDiff += Math.max(0, 100 - Math.abs(prev - curr) / 10);
+      const swing = Math.abs(prev - curr);
+      const clamped = Math.min(swing, 1000);
+      totalScore += Math.max(0, 100 - clamped / 15);
       count++;
     }
   }
-  return count > 0 ? totalDiff / count : null;
+  return count > 0 ? Math.min(100, Math.max(0, totalScore / count)) : null;
 }
 
 function renderAccuracy(history) {
@@ -269,10 +282,17 @@ chrome.runtime.onMessage.addListener((message) => {
       classifyBanner.hidden = true;
     }
   }
+  if (message.type === 'darkMode-changed') {
+    if (message.darkMode) document.body.classList.add('dark');
+    else document.body.classList.remove('dark');
+  }
 });
 
 async function init() {
   await loadSettings();
+  chrome.storage.local.get('darkMode', (data) => {
+    if (data.darkMode) document.body.classList.add('dark');
+  });
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || !tab.url || !tab.url.includes('chess.com')) {
     setStatus('Open Chess.com to start');
@@ -318,10 +338,6 @@ darkToggle.addEventListener('click', async () => {
   document.body.classList.toggle('dark');
   const isDark = document.body.classList.contains('dark');
   await chrome.storage.local.set({ darkMode: isDark });
-});
-
-chrome.storage.local.get('darkMode', (data) => {
-  if (data.darkMode) document.body.classList.add('dark');
 });
 
 init();
