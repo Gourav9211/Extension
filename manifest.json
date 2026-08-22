@@ -13,7 +13,8 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Open Chess Position Analyst"
+    "default_title": "Open Chess Position Analyst",
+    "default_popup": "src/popup-launcher.html"
   },
   "content_scripts": [
     {
@@ -37,8 +38,8 @@
       "description": "Toggle live analysis"
     }
   },
-  "options_page": "src/options.html"
-  ,"options_ui": {
+  "options_page": "src/options.html",
+  "options_ui": {
     "page": "src/options.html",
     "open_in_tab": true
   }
