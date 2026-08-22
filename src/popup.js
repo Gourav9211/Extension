@@ -382,27 +382,41 @@ chrome.runtime.onMessage.addListener((message) => {
 });
 
 async function init() {
-  await loadSettings();
+  try {
+    await loadSettings();
+  } catch (e) {}
+
   chrome.storage.local.get('darkMode', (data) => {
-    if (data.darkMode) document.body.classList.add('dark');
+    if (data && data.darkMode) document.body.classList.add('dark');
   });
-  const tab = await queryActiveTab();
+
+  let tab = null;
+  try {
+    tab = await queryActiveTab();
+  } catch (e) {
+    setStatus('Open Chess.com to start');
+    noGame.hidden = false;
+    result.hidden = true;
+    return;
+  }
+
   if (!tab || !tab.url || !tab.url.includes('chess.com')) {
     setStatus('Open Chess.com to start');
     noGame.hidden = false;
     result.hidden = true;
     return;
   }
+
   try {
     const response = await tabsSendMessage(tab.id, { type: 'capture-position' });
-    if (response && response.ok) {
-      setStatus('Analyzing...', true);
-      noGame.hidden = true;
-      await runtimeSendMessage({ type: 'board-update', fen: response.position.fen });
-    } else {
+    if (!(response && response.ok)) {
       setStatus('Waiting for game...');
       noGame.hidden = false;
+      return;
     }
+    setStatus('Analyzing...', true);
+    noGame.hidden = true;
+    await runtimeSendMessage({ type: 'board-update', fen: response.position.fen });
   } catch (e) {
     setStatus('Waiting for game...');
     noGame.hidden = false;
@@ -435,4 +449,9 @@ darkToggle.addEventListener('click', async () => {
   await storageSet({ darkMode: isDark });
 });
 
-init();
+init().catch(function(error) {
+  console.error('Popup init failed:', error);
+  setStatus('Popup failed to initialize');
+  noGame.hidden = false;
+  result.hidden = true;
+});

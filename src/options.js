@@ -151,15 +151,20 @@ async function loadAccuracy() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  await loadSettings();
-  await loadArchive();
-  await loadAccuracy();
+  try {
+    await loadSettings();
+    await loadArchive();
+    await loadAccuracy();
+  } catch (error) {
+    console.error('Options init failed:', error);
+    setStatus('Some settings failed to load. You can still edit values.');
+  }
 
   for (const key of Object.keys(DEFAULTS)) {
     const el = $(`#${key}`);
     if (el) {
-      el.addEventListener('change', saveSettings);
-      el.addEventListener('input', saveSettings);
+      el.addEventListener('change', function() { saveSettings().catch(function() {}); });
+      el.addEventListener('input', function() { saveSettings().catch(function() {}); });
     }
   }
 
