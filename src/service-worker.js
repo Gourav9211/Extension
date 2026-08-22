@@ -489,5 +489,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
+chrome.action.onClicked.addListener(function() {
+  chrome.tabs.create({ url: chrome.runtime.getURL('src/popup.html') });
+});
+
 ensureOffscreen();
 loadSettings();

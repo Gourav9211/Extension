@@ -13,8 +13,7 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Analyze chess position",
-    "default_popup": "src/popup.html"
+    "default_title": "Open Chess Position Analyst"
   },
   "content_scripts": [
     {
