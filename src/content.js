@@ -3,9 +3,53 @@ let observer = null;
 let coordsOverlay = null;
 let coordsVisible = false;
 let observeRetryTimer = null;
+let lastCaptureErrorLog = { message: '', ts: 0 };
 
 function findBoard() {
-  return document.querySelector('[data-board], .board, chess-board, [class*="board"]');
+  const candidates = new Set();
+  const selectors = ['chess-board', '[data-board]', '[data-fen]', '.board', '[class*="board"]'];
+  for (const selector of selectors) {
+    for (const el of document.querySelectorAll(selector)) {
+      if (el instanceof Element) candidates.add(el);
+    }
+  }
+
+  let best = null;
+  let bestScore = -1;
+  for (const board of candidates) {
+    const score = scoreBoardCandidate(board);
+    if (score > bestScore) {
+      best = board;
+      bestScore = score;
+    }
+  }
+
+  return bestScore > 0 ? best : null;
+}
+
+function scoreBoardCandidate(board) {
+  let score = 0;
+  const directFen = board.getAttribute('data-fen') || board.closest('[data-fen]')?.getAttribute('data-fen');
+  if (directFen) score += 100;
+
+  const pieces = board.querySelectorAll('.piece');
+  if (pieces.length) score += 20;
+
+  let squareClassHits = 0;
+  const piecePattern = /(?:^|\s)([wb])([prnbqk])(?:\s|$)/i;
+  for (const piece of pieces) {
+    if (piecePattern.test(piece.className) && /square-(\d+|[a-h][1-8])/i.test(piece.className)) {
+      squareClassHits += 1;
+      if (squareClassHits >= 4) break;
+    }
+  }
+  if (squareClassHits) score += 40;
+
+  const rect = board.getBoundingClientRect();
+  const area = Math.max(0, rect.width * rect.height);
+  score += Math.min(20, area / 20000);
+
+  return score;
 }
 
 function squareFromClass(squareNumber, isBlackOrientation) {
@@ -20,7 +64,7 @@ function squareFromClass(squareNumber, isBlackOrientation) {
 function capturePosition() {
   const board = findBoard();
   if (!board) {
-    throw new Error('No Chess.com board was found on this page.');
+    return null;
   }
 
   const directFen = board.getAttribute('data-fen') || board.closest('[data-fen]')?.getAttribute('data-fen');
@@ -31,17 +75,24 @@ function capturePosition() {
   const isBlackOrientation = /orientation-black/.test(board.className) || /orientation-black/.test(board.parentElement?.className || '');
   const pieces = [...board.querySelectorAll('.piece')];
   const squares = new Map();
-  const piecePattern = /\b([wb])([prnbqk])\b/;
+  const piecePattern = /(?:^|\s)([wb])([prnbqk])(?:\s|$)/i;
 
   for (const piece of pieces) {
     const pieceMatch = piece.className.match(piecePattern);
-    const squareMatch = piece.className.match(/square-(\d+)/);
-    if (!pieceMatch || !squareMatch) continue;
-    squares.set(squareFromClass(Number(squareMatch[1]), isBlackOrientation), pieceMatch[1] + pieceMatch[2]);
+    const squareNumberMatch = piece.className.match(/square-(\d+)/);
+    const squareCoordMatch = piece.className.match(/square-([a-h][1-8])/i);
+    if (!pieceMatch || (!squareNumberMatch && !squareCoordMatch)) continue;
+    if (squareNumberMatch) {
+      squares.set(squareFromClass(Number(squareNumberMatch[1]), isBlackOrientation), pieceMatch[1].toLowerCase() + pieceMatch[2].toLowerCase());
+      continue;
+    }
+    if (squareCoordMatch) {
+      squares.set(squareCoordMatch[1].toLowerCase(), pieceMatch[1].toLowerCase() + pieceMatch[2].toLowerCase());
+    }
   }
 
   if (!squares.size) {
-    throw new Error('The board was found, but its pieces could not be read. Open a visible game or analysis board.');
+    return null;
   }
 
   const rows = [];
@@ -69,12 +120,18 @@ function capturePosition() {
 function sendFenUpdate() {
   try {
     const position = capturePosition();
+    if (!position) return;
     if (position.fen !== lastFen) {
       lastFen = position.fen;
       chrome.runtime.sendMessage({ type: 'board-update', fen: position.fen });
     }
   } catch (error) {
-    console.error('Chess extension error:', error.message);
+    const now = Date.now();
+    const message = error && error.message ? error.message : String(error);
+    if (message !== lastCaptureErrorLog.message || now - lastCaptureErrorLog.ts > 10000) {
+      console.error('Chess extension error:', message);
+      lastCaptureErrorLog = { message, ts: now };
+    }
   }
 }
 
@@ -167,7 +224,12 @@ function refreshCoords() {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'capture-position') {
     try {
-      sendResponse({ ok: true, position: capturePosition() });
+      const position = capturePosition();
+      if (!position) {
+        sendResponse({ ok: false, error: 'No active game board detected yet. Open a live game/analysis board and try again.' });
+      } else {
+        sendResponse({ ok: true, position: position });
+      }
     } catch (error) {
       sendResponse({ ok: false, error: error.message });
     }
