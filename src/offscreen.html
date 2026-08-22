@@ -2,39 +2,8 @@
 <html>
 <head><title>Stockfish Engine</title></head>
 <body>
-<script>
-var Module = {
-  print: function(text) {
-    chrome.runtime.sendMessage({ type: 'sf-line', text: text }).catch(function() {});
-  },
-  printErr: function(text) {},
-  locateFile: function(path) {
-    return chrome.runtime.getURL('engine/' + path);
-  },
-  noInitialRun: true,
-  noExitRuntime: true
-};
-
-chrome.runtime.onMessage.addListener(function(message, _sender, sendResponse) {
-  if (message.type === 'sf-cmd') {
-    if (typeof Module._uci_command === 'function') {
-      Module._uci_command(message.cmd);
-      sendResponse({ ok: true });
-    } else {
-      sendResponse({ ok: false, error: 'Engine not ready' });
-    }
-    return true;
-  }
-});
-</script>
+<script src="offscreen.js"></script>
 <script src="../engine/stockfish.js"></script>
-<script>
-// stockfish.js called run() but noInitialRun skipped callMain(),
-// so the UCI loop never started. Start it now via _main().
-// Wrap in try because the engine may already be running in some edge cases.
-try { Module._main(); } catch(e) {}
-// Signal that the engine is alive and _uci_command is available.
-chrome.runtime.sendMessage({ type: 'sf-engine-loaded' }).catch(function() {});
-</script>
+<script src="offscreen-boot.js"></script>
 </body>
 </html>
