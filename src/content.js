@@ -8,9 +8,23 @@ let arrowOverlay = null;
 
 const BOARD_SELECTORS = '[data-board], chess-board, wc-chess-board, .board, [class*="board"]';
 
+const START_PLACEMENT = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR';
+
 function isBlackOrientation(board) {
-  return /orientation-black/.test(board.className || '') ||
-    /orientation-black/.test(board.parentElement?.className || '');
+  let el = board;
+  for (let depth = 0; el && depth < 10; depth += 1, el = el.parentElement) {
+    const cls = typeof el.className === 'string' ? el.className : '';
+    if (/(^|\s)orientation-black(\s|$)/.test(cls) || /(^|\s)flipped(\s|$)/.test(cls)) return true;
+    if (/(^|\s)orientation-white(\s|$)/.test(cls)) return false;
+    if (el.hasAttribute && el.getAttribute) {
+      const orient = el.getAttribute('data-orientation') || el.getAttribute('orientation');
+      if (orient) return /black/i.test(orient);
+      const flippedAttr = el.getAttribute('flipped');
+      if (flippedAttr === '' || flippedAttr === 'true') return true;
+      if (flippedAttr === 'false') return false;
+    }
+  }
+  return false;
 }
 
 function isValidBoard(el) {
@@ -122,13 +136,17 @@ function detectSideToMove(board, squares) {
   }
   // chess.com marks the last move with .highlight squares; the highlighted
   // square that currently holds a piece is the destination of that move.
+  // If more than one highlighted square holds a piece (selection, premove,
+  // stale overlays) the evidence is ambiguous -> report unknown.
+  const movers = new Set();
   for (const el of board.querySelectorAll('.highlight')) {
     const m = (el.className || '').match(/square-(\d{1,2})/);
     if (!m) continue;
     const key = squareFromToken(m[1]);
     const piece = key && squares.get(key);
-    if (piece) return piece[0] === 'w' ? 'b' : 'w';
+    if (piece) movers.add(piece[0]);
   }
+  if (movers.size === 1) return movers.has('w') ? 'b' : 'w';
   return null;
 }
 
@@ -192,12 +210,18 @@ function sendFenUpdate() {
     }
     implausibleLogged = false;
 
-    // Only analyze the side the user is playing (board orientation = user color)
+    // Only analyze the side the user is playing (board orientation = user color).
+    // When the side to move cannot be determined reliably, do NOT analyze:
+    // a wrong guess recommends moves for the enemy or fires before the
+    // opponent has replied. Exception: the exact initial placement is
+    // always white's move.
     const board = (observedBoard && observedBoard.isConnected) ? observedBoard : findBoard();
     if (board) {
       const userColor = isBlackOrientation(board) ? 'b' : 'w';
-      const stm = detectSideToMove(board, collectPieces(board)) || 'w';
-      if (stm !== userColor) {
+      const placement = position.fen.split(' ')[0];
+      let stm = detectSideToMove(board, collectPieces(board));
+      if (!stm && placement === START_PLACEMENT) stm = 'w';
+      if (!stm || stm !== userColor) {
         clearArrow();
         return;
       }
