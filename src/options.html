@@ -16,12 +16,12 @@
     .row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
     .row:last-child { margin-bottom: 0; }
     .row label { font: 14px/1.4 sans-serif; }
-    .row input[type="number"], .row input[type="text"], .row input[type="password"], .row select {
+    .row input[type="number"], .row input[type="text"], .row select {
       width: 80px; padding: 6px 8px; border: 1px solid #c8d0c3; border-radius: 4px;
       font: 14px/1 sans-serif; background: #fff; color: #1d2824;
     }
     body.dark .row input, body.dark .row select { background: #333; color: #e0e0e0; border-color: #555; }
-    .row input[type="text"], .row input[type="password"] { width: 100%; }
+    .row input[type="text"] { width: 100%; }
     textarea { width: 100%; min-height: 80px; padding: 8px; border: 1px solid #c8d0c3; border-radius: 4px;
       font: 13px/1.4 sans-serif; resize: vertical; background: #fff; color: #1d2824; }
     body.dark textarea { background: #333; color: #e0e0e0; border-color: #555; }
@@ -101,7 +101,7 @@
     <h2>Gemini AI</h2>
     <div class="row">
       <label>API key</label>
-      <input id="geminiApiKey" type="password" style="width:200px" autocomplete="off">
+      <input id="geminiKey" type="password" style="width:200px" autocomplete="off">
     </div>
     <div class="row">
       <label>Custom prompt</label>

@@ -24,101 +24,6 @@ const classifyText = document.querySelector('#classify-text');
 let audioCtx = null;
 let evalHistory = [];
 let settings = { sound: true, coords: true, graph: true, history: true, classify: true };
-let graphRafPending = false;
-let latestEvals = null;
-
-function storageGet(keys) {
-  return new Promise((resolve, reject) => {
-    try {
-      chrome.storage.local.get(keys, (data) => {
-        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else resolve(data || {});
-      });
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
-
-function storageSet(values) {
-  return new Promise((resolve, reject) => {
-    try {
-      chrome.storage.local.set(values, () => {
-        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else resolve();
-      });
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
-
-function runtimeSendMessage(message) {
-  return new Promise((resolve, reject) => {
-    try {
-      chrome.runtime.sendMessage(message, (response) => {
-        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else resolve(response);
-      });
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
-
-function queryActiveTab() {
-  return new Promise((resolve, reject) => {
-    try {
-      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else resolve((tabs && tabs[0]) || null);
-      });
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
-
-function tabsSendMessage(tabId, message) {
-  return new Promise((resolve, reject) => {
-    try {
-      chrome.tabs.sendMessage(tabId, message, (response) => {
-        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else resolve(response);
-      });
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
-
-function openOptionsPageSafe() {
-  return new Promise((resolve) => {
-    try {
-      chrome.runtime.openOptionsPage(function() {
-        if (chrome.runtime.lastError) {
-          try {
-            chrome.tabs.create({ url: chrome.runtime.getURL('src/options.html') }, function() {
-              resolve();
-            });
-          } catch (e) {
-            resolve();
-          }
-        } else {
-          resolve();
-        }
-      });
-    } catch (e) {
-      try {
-        chrome.tabs.create({ url: chrome.runtime.getURL('src/options.html') }, function() {
-          resolve();
-        });
-      } catch (err) {
-        resolve();
-      }
-    }
-  });
-}
 
 function setStatus(text, active) {
   statusText.textContent = text;
@@ -126,7 +31,7 @@ function setStatus(text, active) {
 }
 
 async function loadSettings() {
-  const stored = await storageGet(Object.keys(settings));
+  const stored = await chrome.storage.local.get(Object.keys(settings));
   for (const key of Object.keys(settings)) {
     if (stored[key] != null) settings[key] = stored[key];
   }
@@ -194,7 +99,12 @@ function renderClassification(cls) {
   classifyText.style.color = colors[cls] || '#999';
 }
 
-function drawGraph(evals) {
+function renderGraph(evals) {
+  if (!settings.graph || evals.length < 2) {
+    graphSection.hidden = true;
+    return;
+  }
+  graphSection.hidden = false;
   const ctx = graphCanvas.getContext('2d');
   const w = graphCanvas.width;
   const h = graphCanvas.height;
@@ -209,6 +119,7 @@ function drawGraph(evals) {
   ctx.fillRect(0, 0, w, h);
 
   ctx.beginPath();
+  ctx.moveTo(0, h / 2);
   for (let i = 0; i < validEvals.length; i++) {
     const x = (i / (validEvals.length - 1)) * w;
     const y = h / 2 - (validEvals[i] / 1000) * (h / 2);
@@ -224,28 +135,13 @@ function drawGraph(evals) {
   for (let i = 0; i < validEvals.length; i++) {
     const x = (i / (validEvals.length - 1)) * w;
     const y = h / 2 - (validEvals[i] / 1000) * (h / 2);
-    ctx.lineTo(x, y);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
   }
   ctx.lineTo(w, h / 2);
   ctx.lineTo(0, h / 2);
   ctx.fillStyle = validEvals[validEvals.length - 1] > 0 ? 'rgba(38,61,50,0.15)' : 'rgba(192,57,43,0.15)';
   ctx.fill();
-}
-
-function renderGraph(evals) {
-  if (!settings.graph || evals.length < 2) {
-    graphSection.hidden = true;
-    return;
-  }
-  graphSection.hidden = false;
-  latestEvals = evals;
-  if (!graphRafPending) {
-    graphRafPending = true;
-    requestAnimationFrame(function() {
-      graphRafPending = false;
-      if (latestEvals) drawGraph(latestEvals);
-    });
-  }
 }
 
 function renderMoveHistory(history) {
@@ -288,19 +184,17 @@ function renderMoveHistory(history) {
 
 function calculateAccuracyFromHistory(history) {
   if (history.length < 2) return null;
-  let totalScore = 0;
+  let totalDiff = 0;
   let count = 0;
   for (let i = 1; i < history.length; i++) {
     const prev = history[i - 1].eval;
     const curr = history[i].eval;
     if (prev != null && curr != null) {
-      const swing = Math.abs(prev - curr);
-      const clamped = Math.min(swing, 1000);
-      totalScore += Math.max(0, 100 - clamped / 15);
+      totalDiff += Math.max(0, 100 - Math.abs(prev - curr) / 10);
       count++;
     }
   }
-  return count > 0 ? Math.min(100, Math.max(0, totalScore / count)) : null;
+  return count > 0 ? totalDiff / count : null;
 }
 
 function renderAccuracy(history) {
@@ -346,7 +240,7 @@ function renderAnalysis(analysis) {
 
 async function refreshHistory() {
   try {
-    const resp = await runtimeSendMessage({ type: 'get-history' });
+    const resp = await chrome.runtime.sendMessage({ type: 'get-history' });
     if (resp && resp.ok) {
       renderMoveHistory(resp.history);
       renderAccuracy(resp.history);
@@ -375,48 +269,27 @@ chrome.runtime.onMessage.addListener((message) => {
       classifyBanner.hidden = true;
     }
   }
-  if (message.type === 'darkMode-changed') {
-    if (message.darkMode) document.body.classList.add('dark');
-    else document.body.classList.remove('dark');
-  }
 });
 
 async function init() {
-  try {
-    await loadSettings();
-  } catch (e) {}
-
-  chrome.storage.local.get('darkMode', (data) => {
-    if (data && data.darkMode) document.body.classList.add('dark');
-  });
-
-  let tab = null;
-  try {
-    tab = await queryActiveTab();
-  } catch (e) {
-    setStatus('Open Chess.com to start');
-    noGame.hidden = false;
-    result.hidden = true;
-    return;
-  }
-
+  await loadSettings();
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || !tab.url || !tab.url.includes('chess.com')) {
     setStatus('Open Chess.com to start');
     noGame.hidden = false;
     result.hidden = true;
     return;
   }
-
   try {
-    const response = await tabsSendMessage(tab.id, { type: 'capture-position' });
-    if (!(response && response.ok)) {
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'capture-position' });
+    if (response && response.ok) {
+      setStatus('Analyzing...', true);
+      noGame.hidden = true;
+      await chrome.runtime.sendMessage({ type: 'board-update', fen: response.position.fen });
+    } else {
       setStatus('Waiting for game...');
       noGame.hidden = false;
-      return;
     }
-    setStatus('Analyzing...', true);
-    noGame.hidden = true;
-    await runtimeSendMessage({ type: 'board-update', fen: response.position.fen });
   } catch (e) {
     setStatus('Waiting for game...');
     noGame.hidden = false;
@@ -424,7 +297,7 @@ async function init() {
 }
 
 document.querySelector('#export-pgn').addEventListener('click', async () => {
-  const resp = await runtimeSendMessage({ type: 'export-pgn' });
+  const resp = await chrome.runtime.sendMessage({ type: 'export-pgn' });
   if (resp && resp.ok && resp.pgn) {
     const blob = new Blob([resp.pgn], { type: 'application/x-chess-pgn' });
     const url = URL.createObjectURL(blob);
@@ -433,25 +306,22 @@ document.querySelector('#export-pgn').addEventListener('click', async () => {
 });
 
 document.querySelector('#save-game').addEventListener('click', async () => {
-  const resp = await runtimeSendMessage({ type: 'save-game' });
+  const resp = await chrome.runtime.sendMessage({ type: 'save-game' });
   if (resp && resp.ok) {
     setStatus('Game saved to archive.');
   }
 });
 
-document.querySelector('#settings').addEventListener('click', async () => {
-  await openOptionsPageSafe();
-});
+document.querySelector('#settings').addEventListener('click', () => chrome.runtime.openOptionsPage());
 
 darkToggle.addEventListener('click', async () => {
   document.body.classList.toggle('dark');
   const isDark = document.body.classList.contains('dark');
-  await storageSet({ darkMode: isDark });
+  await chrome.storage.local.set({ darkMode: isDark });
 });
 
-init().catch(function(error) {
-  console.error('Popup init failed:', error);
-  setStatus('Popup failed to initialize');
-  noGame.hidden = false;
-  result.hidden = true;
+chrome.storage.local.get('darkMode', (data) => {
+  if (data.darkMode) document.body.classList.add('dark');
 });
+
+init();

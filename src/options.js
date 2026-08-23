@@ -8,49 +8,10 @@ const DEFAULTS = {
   graph: true,
   history: true,
   classify: true,
-  geminiApiKey: '',
+  geminiKey: '',
   geminiPrompt: '',
   debounceMs: 500
 };
-
-function storageGet(keys) {
-  return new Promise((resolve, reject) => {
-    try {
-      chrome.storage.local.get(keys, (data) => {
-        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else resolve(data || {});
-      });
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
-
-function storageSet(values) {
-  return new Promise((resolve, reject) => {
-    try {
-      chrome.storage.local.set(values, () => {
-        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else resolve();
-      });
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
-
-function runtimeSendMessage(message) {
-  return new Promise((resolve, reject) => {
-    try {
-      chrome.runtime.sendMessage(message, (response) => {
-        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else resolve(response);
-      });
-    } catch (error) {
-      reject(error);
-    }
-  });
-}
 
 function setStatus(msg) {
   const el = $('#status');
@@ -59,7 +20,7 @@ function setStatus(msg) {
 }
 
 async function loadSettings() {
-  const stored = await storageGet(Object.keys(DEFAULTS));
+  const stored = await chrome.storage.local.get(Object.keys(DEFAULTS));
   for (const [key, def] of Object.entries(DEFAULTS)) {
     const val = stored[key] ?? def;
     const el = $(`#${key}`);
@@ -79,15 +40,14 @@ async function saveSettings() {
     else if (el.type === 'number') settings[key] = parseInt(el.value) || def;
     else settings[key] = el.value;
   }
-  await storageSet(settings);
+  await chrome.storage.local.set(settings);
   if (settings.darkMode) document.body.classList.add('dark');
   else document.body.classList.remove('dark');
-  runtimeSendMessage({ type: 'darkMode-changed', darkMode: settings.darkMode }).catch(function() {});
   setStatus('Settings saved.');
 }
 
 async function loadArchive() {
-  const { gameArchive = [] } = await storageGet('gameArchive');
+  const { gameArchive = [] } = await chrome.storage.local.get('gameArchive');
   const list = $('#archiveList');
   if (!gameArchive.length) {
     list.innerHTML = '<div class="empty">No saved games yet.</div>';
@@ -129,7 +89,7 @@ function downloadFile(content, filename, type) {
 }
 
 async function loadAccuracy() {
-  const { gameArchive = [] } = await storageGet('gameArchive');
+  const { gameArchive = [] } = await chrome.storage.local.get('gameArchive');
   const el = $('#accuracyStats');
   if (!gameArchive.length) {
     el.innerHTML = '<div class="empty">Play and analyze games to see your accuracy score.</div>';
@@ -151,20 +111,15 @@ async function loadAccuracy() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  try {
-    await loadSettings();
-    await loadArchive();
-    await loadAccuracy();
-  } catch (error) {
-    console.error('Options init failed:', error);
-    setStatus('Some settings failed to load. You can still edit values.');
-  }
+  await loadSettings();
+  await loadArchive();
+  await loadAccuracy();
 
   for (const key of Object.keys(DEFAULTS)) {
     const el = $(`#${key}`);
     if (el) {
-      el.addEventListener('change', function() { saveSettings().catch(function() {}); });
-      el.addEventListener('input', function() { saveSettings().catch(function() {}); });
+      el.addEventListener('change', saveSettings);
+      el.addEventListener('input', saveSettings);
     }
   }
 
@@ -172,7 +127,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const fen = $('#fenInput').value.trim();
     if (!fen) return setStatus('Enter a FEN first.');
     try {
-      const resp = await runtimeSendMessage({ type: 'analyze-position', fen });
+      const resp = await chrome.runtime.sendMessage({ type: 'analyze-position', fen });
       if (resp && resp.ok) {
         const top = resp.engine.moves[0];
         const eval_ = top.evaluation != null ? (top.evaluation / 100).toFixed(1) :
@@ -187,7 +142,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 
   $('#exportAll').addEventListener('click', async () => {
-    const { gameArchive = [] } = await storageGet('gameArchive');
+    const { gameArchive = [] } = await chrome.storage.local.get('gameArchive');
     if (!gameArchive.length) return setStatus('No games to export.');
     let allPgn = '';
     for (const game of gameArchive) {
@@ -198,7 +153,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   $('#clearArchive').addEventListener('click', async () => {
     if (!confirm('Clear all saved games?')) return;
-    await storageSet({ gameArchive: [], accuracyData: [] });
+    await chrome.storage.local.set({ gameArchive: [], accuracyData: [] });
     loadArchive();
     loadAccuracy();
     setStatus('Archive cleared.');

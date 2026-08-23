@@ -26,8 +26,6 @@ const OPENINGS = {
   'rnbqkbnr/pppp1ppp/8/8/3nP2N/8/PPPP1PPP/RNBQKB1R': 'Scotch'
 };
 
-const PIECE_TO_SAN = { k: 'K', q: 'Q', r: 'R', b: 'B', n: 'N', p: '' };
-
 function countPieces(fen) {
   const board = fen.split(' ')[0];
   let count = 0;
@@ -41,13 +39,7 @@ function countPieces(fen) {
 function classifyMove(prevCp, currCp, isMate) {
   if (prevCp == null || currCp == null) return null;
   const diff = prevCp - currCp;
-  if (isMate) {
-    if (diff > 300) return 'brilliant';
-    if (diff > 50) return 'good';
-    if (diff > -50) return 'inaccuracy';
-    if (diff > -300) return 'mistake';
-    return 'blunder';
-  }
+  if (isMate) return diff > 50 ? 'brilliant' : diff > 0 ? 'good' : diff > -100 ? 'inaccuracy' : diff > -300 ? 'mistake' : 'blunder';
   if (diff >= -10) return 'brilliant';
   if (diff >= -30) return 'good';
   if (diff >= -100) return 'inaccuracy';
@@ -132,7 +124,6 @@ function waitForEngine(timeoutMs) {
     }, timeoutMs || 15000);
     const waiter = { resolve: function() { clearTimeout(timer); resolve(); }, reject: reject };
     engineReadyWaiters.push(waiter);
-    if (engineReady) { waiter.resolve(); }
   });
 }
 
@@ -140,47 +131,16 @@ function sfCommand(cmd) {
   chrome.runtime.sendMessage({ type: 'sf-cmd', cmd }).catch(function() {});
 }
 
-function uciToSan(uciMove, fen) {
-  if (!uciMove || uciMove.length < 4) return uciMove;
-  const from = uciMove.substring(0, 2);
-  const to = uciMove.substring(2, 4);
-  const promo = uciMove.length > 4 ? uciMove[4] : null;
-  const board = fen.split(' ')[0];
-  const rows = board.split('/');
-  const pieceMap = {};
-  for (let r = 0; r < 8; r++) {
-    let c = 0;
-    for (const ch of rows[r]) {
-      if (ch >= '1' && ch <= '8') { c += parseInt(ch); }
-      else { pieceMap[String.fromCharCode(97 + c) + (8 - r)] = ch; c++; }
-    }
-  }
-  const piece = pieceMap[from];
-  if (!piece) return uciMove;
-  const san = PIECE_TO_SAN[piece.toLowerCase()];
-  const isCapture = !!pieceMap[to];
-  if (piece.toLowerCase() === 'k') {
-    if (from === 'e1' && to === 'g1') return 'O-O';
-    if (from === 'e1' && to === 'c1') return 'O-O-O';
-    if (from === 'e8' && to === 'g8') return 'O-O';
-    if (from === 'e8' && to === 'c8') return 'O-O-O';
-    return 'K' + (isCapture ? 'x' : '') + to;
-  }
-  if (piece.toLowerCase() === 'p') {
-    let result = '';
-    if (isCapture) result = from[0] + 'x';
-    result += to;
-    if (promo) result += '=' + promo.toUpperCase();
-    return result;
-  }
-  return san + (isCapture ? 'x' : '') + to;
-}
-
 async function queryTablebase(fen) {
   try {
     const resp = await fetch(TABLEBASE_URL + '?fen=' + encodeURIComponent(fen));
     if (!resp.ok) return null;
     const data = await resp.json();
+    if (data.category === 'draw' || data.category === 'blessed-loss' || data.category === 'cursed-win') {
+      return { category: data.category, dtm: data.dtm, moves: (data.moves || []).slice(0, settings.multiPv).map(m => ({
+        move: m.san, uci: m.uci, category: m.category, dtm: m.dtm
+      }))};
+    }
     return { category: data.category, dtm: data.dtm, moves: (data.moves || []).slice(0, settings.multiPv).map(m => ({
       move: m.san, uci: m.uci, category: m.category, dtm: m.dtm
     }))};
@@ -228,7 +188,8 @@ function processEngineLine(text) {
     if (!parsed.length && move) {
       parsed.push({ move: move, line: move, evaluation: null, mate: null, depth: null });
     }
-    info.resolve({ bestMove: move, moves: parsed });
+    const maxDepth = parsed.reduce(function(d, p) { return p.depth && p.depth > d ? p.depth : d; }, 0);
+    info.resolve({ bestMove: move, moves: parsed, depth: maxDepth || null });
     return;
   }
   if (text.startsWith('info ') && pendingEval && text.includes(' pv ')) {
@@ -376,27 +337,25 @@ function generatePGN() {
   const moves = gameHistory.filter(function(g) { return g.bestMove; });
   for (let i = 0; i < moves.length; i++) {
     if (i % 2 === 0) pgn += (Math.floor(i / 2) + 1) + '. ';
-    const san = uciToSan(moves[i].bestMove, moves[i].fen);
-    pgn += san + ' ';
+    pgn += moves[i].bestMove + ' ';
   }
   return pgn.trim();
 }
 
 function calculateAccuracy() {
   if (gameHistory.length < 2) return null;
-  let totalScore = 0;
+  let totalDiff = 0;
   let count = 0;
   for (let i = 1; i < gameHistory.length; i++) {
     const prev = gameHistory[i - 1].eval;
     const curr = gameHistory[i].eval;
     if (prev != null && curr != null) {
-      const swing = Math.abs(prev - curr);
-      const clamped = Math.min(swing, 1000);
-      totalScore += Math.max(0, 100 - clamped / 15);
+      const diff = Math.abs(prev - curr);
+      totalDiff += Math.max(0, 100 - diff / 10);
       count++;
     }
   }
-  return count > 0 ? Math.min(100, Math.max(0, totalScore / count)) : null;
+  return count > 0 ? totalDiff / count : null;
 }
 
 async function saveGameToArchive() {
@@ -487,10 +446,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab.url && tab.url.includes('chess.com')) {
     chrome.tabs.sendMessage(tabId, { type: 'start-monitoring' }).catch(function() {});
   }
-});
-
-chrome.action.onClicked.addListener(function() {
-  chrome.tabs.create({ url: chrome.runtime.getURL('src/popup.html') });
 });
 
 ensureOffscreen();
