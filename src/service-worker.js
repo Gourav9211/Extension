@@ -11,7 +11,7 @@ let engineReady = false;
 let engineReadyWaiters = [];
 let pendingEval = null;
 let lastEval = null;
-let settings = { depth: 18, multiPv: 3, sound: true, debounceMs: 500, classify: true, geminiPrompt: '' };
+let settings = { depth: 30, multiPv: 3, sound: true, debounceMs: 500, classify: true, geminiPrompt: '' };
 
 const OPENINGS = {
   'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR': "King's Pawn",
@@ -174,7 +174,7 @@ function evaluateWithStockfish(fen, multiPv) {
         pendingEval = null;
         reject(new Error('Engine evaluation timeout'));
       }
-    }, 30000);
+    }, Math.max(30000, settings.depth * 3000));
     sfCommand('stop');
     sfCommand('ucinewgame');
     sfCommand('position fen ' + fen);

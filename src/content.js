@@ -37,6 +37,10 @@ function isValidBoard(el) {
 }
 
 function findBoard() {
+  // Modern chess.com renders the real board as <wc-chess-board> nested inside
+  // layout wrappers; prefer it over bigger container divs.
+  const direct = document.querySelector('wc-chess-board, chess-board');
+  if (direct && isValidBoard(direct)) return direct;
   let best = null;
   let bestArea = 0;
   for (const el of document.querySelectorAll(BOARD_SELECTORS)) {
@@ -47,6 +51,10 @@ function findBoard() {
       best = el;
       bestArea = area;
     }
+  }
+  if (best) {
+    const inner = best.querySelector('wc-chess-board, chess-board');
+    if (inner && isValidBoard(inner)) return inner;
   }
   return best;
 }
@@ -191,6 +199,41 @@ function capturePosition() {
 
 let captureTimer = null;
 let implausibleLogged = false;
+let prevPlacement = '';
+let lastMoveBy = '';
+
+function placementToMap(placement) {
+  const map = new Map();
+  const rows = placement.split('/');
+  for (let r = 0; r < 8; r += 1) {
+    let file = 0;
+    for (const ch of rows[r]) {
+      if (ch >= '1' && ch <= '8') {
+        file += parseInt(ch, 10);
+      } else {
+        map.set(String.fromCharCode(97 + file) + (8 - r), ch);
+        file += 1;
+      }
+    }
+  }
+  return map;
+}
+
+// Infer who made the most recent move by diffing consecutive settled
+// placements. Independent of any DOM highlight markup. A messy diff
+// (game reset, multi-piece scramble) clears the signal instead of guessing.
+function trackTurnFromDiff(placement) {
+  if (prevPlacement && prevPlacement !== placement) {
+    const before = placementToMap(prevPlacement);
+    const afterMap = placementToMap(placement);
+    const addedColors = new Set();
+    for (const [sq, pc] of afterMap) {
+      if (before.get(sq) !== pc) addedColors.add(pc === pc.toUpperCase() ? 'w' : 'b');
+    }
+    lastMoveBy = addedColors.size === 1 ? [...addedColors][0] : '';
+  }
+  prevPlacement = placement;
+}
 
 function sendFenUpdate() {
   if (observer && observedBoard && !observedBoard.isConnected) {
@@ -210,20 +253,31 @@ function sendFenUpdate() {
     }
     implausibleLogged = false;
 
-    // Only analyze the side the user is playing (board orientation = user color).
-    // When the side to move cannot be determined reliably, do NOT analyze:
-    // a wrong guess recommends moves for the enemy or fires before the
-    // opponent has replied. Exception: the exact initial placement is
-    // always white's move.
+    // Only analyze the side the user is playing (board orientation = user
+    // color). Turn evidence, most reliable first:
+    //   1. explicit data-side-to-move attribute (test pages)
+    //   2. last-move highlight markup when unambiguous
+    //   3. diff of consecutive captures: whoever just moved, it is the
+    //      other side's turn - this blocks analysis of the user's own
+    //      fresh move even when the site renders no highlight markers
+    //   4. exact initial placement is always white's move
+    // When nothing is conclusive, do NOT analyze: a wrong guess recommends
+    // moves for the enemy or fires before the opponent has replied.
     const board = (observedBoard && observedBoard.isConnected) ? observedBoard : findBoard();
     if (board) {
+      trackTurnFromDiff(position.fen.split(' ')[0]);
       const userColor = isBlackOrientation(board) ? 'b' : 'w';
-      const placement = position.fen.split(' ')[0];
+      const parts = position.fen.split(' ');
       let stm = detectSideToMove(board, collectPieces(board));
-      if (!stm && placement === START_PLACEMENT) stm = 'w';
+      if (!stm && lastMoveBy) stm = lastMoveBy === 'w' ? 'b' : 'w';
+      if (!stm && parts[0] === START_PLACEMENT) stm = 'w';
       if (!stm || stm !== userColor) {
         clearArrow();
         return;
+      }
+      if (parts[1] !== stm) {
+        parts[1] = stm;
+        position.fen = parts.join(' ');
       }
     }
 
