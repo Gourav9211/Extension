@@ -46,6 +46,55 @@ function squareFromClass(squareNumber, isBlackOrientation) {
   return `${String.fromCharCode(97 + displayFile)}${displayRank}`;
 }
 
+function detectSideToMove(board) {
+  const el = board.closest('[data-side-to-move]') || board;
+  const v = (el.getAttribute('data-side-to-move') || '').toLowerCase();
+  if (v === 'w' || v === 'white') return 'w';
+  if (v === 'b' || v === 'black') return 'b';
+  return null;
+}
+
+function isPlausible(fen) {
+  const boardPart = fen.split(' ')[0];
+  if (!boardPart) return false;
+  const rows = boardPart.split('/');
+  if (rows.length !== 8) return false;
+  let wk = 0, bk = 0, wp = 0, bp = 0;
+  for (let i = 0; i < rows.length; i++) {
+    let rankPawns = 0;
+    for (const ch of rows[i]) {
+      if (ch === 'P') { wp++; rankPawns++; }
+      else if (ch === 'p') { bp++; rankPawns++; }
+      else if (ch === 'K') wk++;
+      else if (ch === 'k') bk++;
+    }
+    if ((i === 0 || i === 7) && rankPawns > 0) return false;
+  }
+  return wk === 1 && bk === 1 && wp <= 8 && bp <= 8;
+}
+
+function pieceAt(rows, fileIdx, rankIdx) {
+  let col = 0;
+  for (const ch of rows[rankIdx]) {
+    if (ch >= '1' && ch <= '8') col += parseInt(ch);
+    else { if (col === fileIdx) return ch; col++; }
+  }
+  return null;
+}
+
+function inferCastling(rows) {
+  let rights = '';
+  if (pieceAt(rows, 4, 7) === 'K') {
+    if (pieceAt(rows, 7, 7) === 'R') rights += 'K';
+    if (pieceAt(rows, 0, 7) === 'R') rights += 'Q';
+  }
+  if (pieceAt(rows, 4, 0) === 'k') {
+    if (pieceAt(rows, 7, 0) === 'r') rights += 'k';
+    if (pieceAt(rows, 0, 0) === 'r') rights += 'q';
+  }
+  return rights || '-';
+}
+
 function capturePosition() {
   const board = findBoard();
   if (!board) {
@@ -53,7 +102,7 @@ function capturePosition() {
   }
 
   const directFen = board.getAttribute('data-fen') || board.closest('[data-fen]')?.getAttribute('data-fen');
-  if (directFen) {
+  if (directFen && isPlausible(directFen)) {
     return { fen: directFen, source: 'Chess.com board FEN' };
   }
 
@@ -63,6 +112,7 @@ function capturePosition() {
   const piecePattern = /\b([wb])([prnbqk])\b/;
 
   for (const piece of pieces) {
+    if (/dragging|drag-overlay|ghost/i.test(piece.className)) continue;
     const pieceMatch = piece.className.match(piecePattern);
     const squareMatch = piece.className.match(/square-(\d+)/);
     if (!pieceMatch || !squareMatch) continue;
@@ -91,9 +141,12 @@ function capturePosition() {
     rows.push(row);
   }
 
-  const sideToMove = board.getAttribute('data-side-to-move') || 'w';
-  return { fen: `${rows.join('/')} ${sideToMove} - - 0 1`, source: 'Chess.com board pieces' };
+  const sideToMove = detectSideToMove(board) || 'w';
+  return { fen: `${rows.join('/')} ${sideToMove} ${inferCastling(rows)} - 0 1`, source: 'Chess.com board pieces' };
 }
+
+let captureTimer = null;
+let implausibleLogged = false;
 
 function sendFenUpdate() {
   if (observer && observedBoard && !observedBoard.isConnected) {
@@ -104,6 +157,14 @@ function sendFenUpdate() {
   try {
     const position = capturePosition();
     lastErrorLogged = '';
+    if (!isPlausible(position.fen)) {
+      if (!implausibleLogged) {
+        implausibleLogged = true;
+        console.warn('Chess extension: captured an impossible position, skipping analysis.');
+      }
+      return;
+    }
+    implausibleLogged = false;
     if (position.fen !== lastFen) {
       lastFen = position.fen;
       chrome.runtime.sendMessage({ type: 'board-update', fen: position.fen });
@@ -114,6 +175,11 @@ function sendFenUpdate() {
       console.warn('Chess extension:', error.message);
     }
   }
+}
+
+function queueFenUpdate() {
+  clearTimeout(captureTimer);
+  captureTimer = setTimeout(sendFenUpdate, 300);
 }
 
 function clearArrow() {
@@ -254,7 +320,7 @@ function startObserving() {
   }
 
   observedBoard = board;
-  observer = new MutationObserver(() => sendFenUpdate());
+  observer = new MutationObserver(() => queueFenUpdate());
   observer.observe(board, { attributes: true, childList: true, subtree: true, attributeFilter: ['class', 'data-fen'] });
 
   sendFenUpdate();
