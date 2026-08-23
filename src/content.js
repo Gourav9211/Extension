@@ -37,20 +37,18 @@ function findBoard() {
   return best;
 }
 
-function squareFromClass(squareNumber, isBlackOrientation) {
-  const index = squareNumber - 1;
-  const file = index % 8;
-  const row = Math.floor(index / 8);
-  const displayFile = isBlackOrientation ? 7 - file : file;
-  const displayRank = isBlackOrientation ? row + 1 : 8 - row;
-  return `${String.fromCharCode(97 + displayFile)}${displayRank}`;
-}
-
-function detectSideToMove(board) {
-  const el = board.closest('[data-side-to-move]') || board;
-  const v = (el.getAttribute('data-side-to-move') || '').toLowerCase();
-  if (v === 'w' || v === 'white') return 'w';
-  if (v === 'b' || v === 'black') return 'b';
+function squareFromToken(token) {
+  // chess.com uses square-XY (file digit 1-8, rank digit 1-8): square-58 -> e8
+  let m = token.match(/^([1-8])([1-8])$/);
+  if (m) return String.fromCharCode(96 + parseInt(m[1], 10)) + m[2];
+  // legacy fallback: linear index 1-64, white-bottom numbering
+  m = token.match(/^([1-9]|[1-5]\d|6[0-4])$/);
+  if (m) {
+    const index = parseInt(m[1], 10) - 1;
+    const file = index % 8;
+    const row = Math.floor(index / 8);
+    return `${String.fromCharCode(97 + file)}${8 - row}`;
+  }
   return null;
 }
 
@@ -95,6 +93,45 @@ function inferCastling(rows) {
   return rights || '-';
 }
 
+function collectPieces(board) {
+  const squares = new Map();
+  const piecePattern = /\b([wb])([prnbqk])\b/;
+
+  for (const piece of board.querySelectorAll('.piece')) {
+    if (/dragging|drag-overlay|ghost/i.test(piece.className)) continue;
+    const pieceMatch = piece.className.match(piecePattern);
+    if (!pieceMatch) continue;
+    let key = null;
+    for (const cls of piece.className.split(/\s+/)) {
+      if (cls.startsWith('square-')) {
+        key = squareFromToken(cls.slice(7));
+        if (key) break;
+      }
+    }
+    if (key) squares.set(key, pieceMatch[1] + pieceMatch[2]);
+  }
+  return squares;
+}
+
+function detectSideToMove(board, squares) {
+  const attrEl = board.closest('[data-side-to-move]');
+  if (attrEl) {
+    const v = (attrEl.getAttribute('data-side-to-move') || '').toLowerCase();
+    if (v === 'w' || v === 'white') return 'w';
+    if (v === 'b' || v === 'black') return 'b';
+  }
+  // chess.com marks the last move with .highlight squares; the highlighted
+  // square that currently holds a piece is the destination of that move.
+  for (const el of board.querySelectorAll('.highlight')) {
+    const m = (el.className || '').match(/square-(\d{1,2})/);
+    if (!m) continue;
+    const key = squareFromToken(m[1]);
+    const piece = key && squares.get(key);
+    if (piece) return piece[0] === 'w' ? 'b' : 'w';
+  }
+  return null;
+}
+
 function capturePosition() {
   const board = findBoard();
   if (!board) {
@@ -106,18 +143,7 @@ function capturePosition() {
     return { fen: directFen, source: 'Chess.com board FEN' };
   }
 
-  const flipped = isBlackOrientation(board);
-  const pieces = [...board.querySelectorAll('.piece')];
-  const squares = new Map();
-  const piecePattern = /\b([wb])([prnbqk])\b/;
-
-  for (const piece of pieces) {
-    if (/dragging|drag-overlay|ghost/i.test(piece.className)) continue;
-    const pieceMatch = piece.className.match(piecePattern);
-    const squareMatch = piece.className.match(/square-(\d+)/);
-    if (!pieceMatch || !squareMatch) continue;
-    squares.set(squareFromClass(Number(squareMatch[1]), flipped), pieceMatch[1] + pieceMatch[2]);
-  }
+  const squares = collectPieces(board);
 
   if (!squares.size) {
     throw new Error('The board was found, but its pieces could not be read. Open a visible game or analysis board.');
@@ -141,7 +167,7 @@ function capturePosition() {
     rows.push(row);
   }
 
-  const sideToMove = detectSideToMove(board) || 'w';
+  const sideToMove = detectSideToMove(board, squares) || 'w';
   return { fen: `${rows.join('/')} ${sideToMove} ${inferCastling(rows)} - 0 1`, source: 'Chess.com board pieces' };
 }
 
