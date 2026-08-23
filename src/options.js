@@ -1,6 +1,7 @@
 const $ = (sel) => document.querySelector(sel);
 const DEFAULTS = {
   depth: 30,
+  autoPlay: false,
   multiPv: 3,
   sound: true,
   darkMode: false,

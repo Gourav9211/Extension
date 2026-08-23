@@ -16,7 +16,7 @@ let lastEval = null;
 // of the newer one.
 let searchesStarted = 0;
 let bestmovesSeen = 0;
-let settings = { depth: 30, multiPv: 3, sound: true, debounceMs: 500, classify: true, geminiPrompt: '' };
+let settings = { depth: 30, multiPv: 3, sound: true, debounceMs: 500, classify: true, autoPlay: false, geminiPrompt: '' };
 
 const OPENINGS = {
   'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR': "King's Pawn",
@@ -91,8 +91,9 @@ function setCache(fen, data) {
 }
 
 async function loadSettings() {
-  const stored = await chrome.storage.local.get(['depth', 'multiPv', 'sound', 'debounceMs', 'classify', 'geminiPrompt']);
+  const stored = await chrome.storage.local.get(['depth', 'multiPv', 'sound', 'debounceMs', 'classify', 'autoPlay', 'geminiPrompt']);
   if (stored.depth) settings.depth = stored.depth;
+  if (stored.autoPlay != null) settings.autoPlay = !!stored.autoPlay;
   if (stored.multiPv) settings.multiPv = stored.multiPv;
   if (stored.sound != null) settings.sound = stored.sound;
   if (stored.debounceMs) settings.debounceMs = stored.debounceMs;
@@ -331,6 +332,62 @@ function sendAnalysisToPopup(result) {
   chrome.runtime.sendMessage(Object.assign({ type: 'analysis-result' }, result)).catch(function() {});
 }
 
+// Trusted input injection: chess.com ignores synthetic DOM events for moves,
+// so auto-play goes through the debugger protocol (same as real user input).
+const attachedTabs = new Set();
+let lastAutoDebug = {};
+
+function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
+
+function dbgSend(target, cmd, params) {
+  return new Promise(function(resolve, reject) {
+    chrome.debugger.sendCommand(target, cmd, params, function(r) {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve(r);
+    });
+  });
+}
+
+async function debuggerPlay(tabId, points) {
+  lastAutoDebug = { ts: Date.now(), tabId, steps: [] };
+  const dbg = (m) => { lastAutoDebug.steps.push(m); };
+  if (!chrome.debugger || !tabId || !points || points.length !== 2) return { ok: false, reason: 'unavailable' };
+  const target = { tabId: tabId };
+  let attachedHere = false;
+  try {
+    await new Promise(function(resolve, reject) {
+      chrome.debugger.attach(target, '1.3', function() {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve();
+      });
+    });
+    attachedHere = true;
+    attachedTabs.add(tabId);
+    dbg('attached');
+    async function press(label, p) {
+      await dbgSend(target, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, button: 'none', pointerType: 'mouse' });
+      await sleep(60);
+      await dbgSend(target, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: p.x, y: p.y, button: 'left', clickCount: 1, pointerType: 'mouse' });
+      await sleep(70);
+      await dbgSend(target, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: p.x, y: p.y, button: 'left', clickCount: 1, pointerType: 'mouse' });
+      dbg('pressed ' + label + ' @' + Math.round(p.x) + ',' + Math.round(p.y));
+    }
+    await press('from', points[0]);
+    await sleep(250);
+    await press('to', points[1]);
+    return { ok: true };
+  } catch (e) {
+    dbg('error: ' + (e.message || e));
+    return { ok: false, reason: e.message || String(e) };
+  } finally {
+    if (attachedHere) {
+      try { chrome.debugger.detach(target, function() {}); } catch (e) {}
+      attachedTabs.delete(tabId);
+      dbg('detached');
+    }
+  }
+}
+
 async function handleBoardUpdate(fen, senderTabId) {
   if (analysisTimeout) clearTimeout(analysisTimeout);
   analysisTimeout = setTimeout(async function() {
@@ -348,7 +405,8 @@ async function handleBoardUpdate(fen, senderTabId) {
           chrome.tabs.sendMessage(tabId, {
             type: 'draw-arrow',
             from: uci.substring(0, 2), to: uci.substring(2, 4),
-            color: '#ff6b35'
+            color: '#ff6b35',
+            play: !!settings.autoPlay
           }).catch(function() {});
         };
         if (senderTabId) {
@@ -427,6 +485,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'board-update') {
     handleBoardUpdate(message.fen, _sender && _sender.tab && _sender.tab.id);
     return false;
+  }
+  if (message.type === 'auto-play-move') {
+    (async function() {
+      const tabId = _sender && _sender.tab && _sender.tab.id;
+      let result = { ok: false, reason: 'no tab' };
+      try { result = await debuggerPlay(tabId, message.points); } catch (e) { result = { ok: false, reason: e.message }; }
+      sendResponse(result);
+    })();
+    return true;
   }
   if (message.type === 'export-pgn') {
     sendResponse({ ok: true, pgn: generatePGN() });

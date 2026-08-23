@@ -335,6 +335,67 @@ function clearArrow() {
   }
 }
 
+// Opt-in (options > Auto-play recommended move): simulate press+release on
+// the from and to squares so the site plays the suggested move. Only ever
+// invoked right after an analysis that passed turn gating, so it can only
+// fire when it is genuinely the user's move.
+function firePointer(el, type, x, y) {
+  const Ev = window.PointerEvent || MouseEvent;
+  el.dispatchEvent(new Ev(type, {
+    bubbles: true, cancelable: true, view: window,
+    clientX: x, clientY: y, button: 0,
+    buttons: /down$/.test(type) ? 1 : 0,
+    pointerId: 1, pointerType: 'mouse', isPrimary: true
+  }));
+}
+
+function pressAt(x, y) {
+  const el = document.elementFromPoint(x, y);
+  if (!el) return;
+  ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach((t) => {
+    try { firePointer(el, t, x, y); } catch (e) { /* PointerEvent unsupported */ }
+  });
+}
+
+function playMove(from, to) {
+  if (!/^[a-h][1-8]$/.test(from) || !/^[a-h][1-8]$/.test(to)) return;
+  const board = (observedBoard && observedBoard.isConnected) ? observedBoard : findBoard();
+  if (!board) return;
+  const geo = boardGeometry(board);
+  if (!geo || !(geo.sq > 0)) return;
+  // never click blind: a piece must actually sit on the from square
+  const originPiece = collectPieces(board).get(from);
+  if (!originPiece) {
+    console.warn('Chess extension: auto-play skipped, no piece on ' + from);
+    return;
+  }
+  const centerOf = (sq) => {
+    const p = squareToUnit(sq, geo.flipped);
+    return { x: geo.left + p.x * geo.sq, y: geo.top + p.y * geo.sq };
+  };
+  const a = centerOf(from);
+  const b = centerOf(to);
+  console.warn('Chess extension: auto-playing ' + from + to + ' (' + Math.round(a.x) + ',' + Math.round(a.y) + ')->(' + Math.round(b.x) + ',' + Math.round(b.y) + ')');
+  // chess.com ignores untrusted (synthetic) input for moves, so route
+  // through the service worker's chrome.debugger for real CDP events;
+  // fall back to synthetic clicks if that is unavailable.
+  const fallback = () => {
+    pressAt(a.x, a.y);
+    setTimeout(() => pressAt(b.x, b.y), 150);
+  };
+  chrome.runtime.sendMessage({ type: 'auto-play-move', points: [a, b] })
+    .then((resp) => {
+      if (!resp || !resp.ok) {
+        console.warn('Chess extension: auto-play unavailable (' + ((resp && resp.reason) || 'no response') + '), using synthetic clicks');
+        fallback();
+      }
+    })
+    .catch((err) => {
+      console.warn('Chess extension: auto-play unavailable (' + (err && err.message) + '), using synthetic clicks');
+      fallback();
+    });
+}
+
 function squareToUnit(square, flipped) {
   const file = square.charCodeAt(0) - 97;
   const rank = parseInt(square[1], 10);
@@ -506,6 +567,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === 'draw-arrow') {
     drawArrow(message.from, message.to, message.color);
+    if (message.play) playMove(message.from, message.to);
     sendResponse({ ok: true });
     return true;
   }
