@@ -1,10 +1,34 @@
 let lastFen = '';
 let observer = null;
+let observedBoard = null;
 let coordsOverlay = null;
 let coordsVisible = false;
+let lastErrorLogged = '';
+
+const BOARD_SELECTORS = '[data-board], chess-board, wc-chess-board, .board, [class*="board"]';
+
+function isValidBoard(el) {
+  if (!el || !el.getBoundingClientRect || !el.querySelectorAll) return false;
+  const rect = el.getBoundingClientRect();
+  if (rect.width < 160 || rect.height < 160) return false;
+  const ratio = rect.width / Math.max(1, rect.height);
+  if (ratio < 0.75 || ratio > 1.33) return false;
+  return el.hasAttribute('data-fen') || el.querySelectorAll('.piece').length > 0;
+}
 
 function findBoard() {
-  return document.querySelector('[data-board], .board, chess-board, [class*="board"]');
+  let best = null;
+  let bestArea = 0;
+  for (const el of document.querySelectorAll(BOARD_SELECTORS)) {
+    if (!isValidBoard(el)) continue;
+    const rect = el.getBoundingClientRect();
+    const area = rect.width * rect.height;
+    if (area > bestArea) {
+      best = el;
+      bestArea = area;
+    }
+  }
+  return best;
 }
 
 function squareFromClass(squareNumber, isBlackOrientation) {
@@ -66,14 +90,23 @@ function capturePosition() {
 }
 
 function sendFenUpdate() {
+  if (observer && observedBoard && !observedBoard.isConnected) {
+    stopObserving();
+    startObserving();
+    return;
+  }
   try {
     const position = capturePosition();
+    lastErrorLogged = '';
     if (position.fen !== lastFen) {
       lastFen = position.fen;
       chrome.runtime.sendMessage({ type: 'board-update', fen: position.fen });
     }
   } catch (error) {
-    console.error('Chess extension error:', error.message);
+    if (error.message !== lastErrorLogged) {
+      lastErrorLogged = error.message;
+      console.warn('Chess extension:', error.message);
+    }
   }
 }
 
@@ -136,10 +169,11 @@ function startObserving() {
 
   const board = findBoard();
   if (!board) {
-    setTimeout(startObserving, 1000);
+    setTimeout(startObserving, 1500);
     return;
   }
 
+  observedBoard = board;
   observer = new MutationObserver(() => sendFenUpdate());
   observer.observe(board, { attributes: true, childList: true, subtree: true, attributeFilter: ['class', 'data-fen'] });
 
@@ -151,6 +185,7 @@ function stopObserving() {
   if (observer) {
     observer.disconnect();
     observer = null;
+    observedBoard = null;
     console.log('Chess extension: stopped monitoring');
   }
 }

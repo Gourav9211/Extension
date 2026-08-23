@@ -102,6 +102,13 @@ function detectOpening(fen) {
 async function ensureOffscreen() {
   if (offscreenCreated) return;
   try {
+    if (chrome.runtime.getContexts) {
+      const contexts = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
+      if (contexts && contexts.length) {
+        offscreenCreated = true;
+        return;
+      }
+    }
     await chrome.offscreen.createDocument({
       url: 'src/offscreen.html',
       reasons: ['WORKERS'],
@@ -109,8 +116,11 @@ async function ensureOffscreen() {
     });
     offscreenCreated = true;
   } catch (e) {
-    if (!e.message?.includes('already exists')) throw e;
-    offscreenCreated = true;
+    if (/already exists|single offscreen document/i.test(e.message || '')) {
+      offscreenCreated = true;
+    } else {
+      throw e;
+    }
   }
 }
 
@@ -448,5 +458,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
-ensureOffscreen();
+ensureOffscreen().catch(function(e) {
+  console.error('Chess Analyst: offscreen setup failed:', e.message);
+});
 loadSettings();
