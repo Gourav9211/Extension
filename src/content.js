@@ -191,6 +191,18 @@ function sendFenUpdate() {
       return;
     }
     implausibleLogged = false;
+
+    // Only analyze the side the user is playing (board orientation = user color)
+    const board = (observedBoard && observedBoard.isConnected) ? observedBoard : findBoard();
+    if (board) {
+      const userColor = isBlackOrientation(board) ? 'b' : 'w';
+      const stm = detectSideToMove(board, collectPieces(board)) || 'w';
+      if (stm !== userColor) {
+        clearArrow();
+        return;
+      }
+    }
+
     if (position.fen !== lastFen) {
       lastFen = position.fen;
       chrome.runtime.sendMessage({ type: 'board-update', fen: position.fen });
@@ -206,6 +218,36 @@ function sendFenUpdate() {
 function queueFenUpdate() {
   clearTimeout(captureTimer);
   captureTimer = setTimeout(sendFenUpdate, 300);
+}
+
+function boardGeometry(board) {
+  const flipped = isBlackOrientation(board);
+  const cells = [];
+  for (const p of board.querySelectorAll('.piece')) {
+    if (/dragging|drag-overlay|ghost/i.test(p.className)) continue;
+    let tok = null;
+    for (const cls of p.className.split(/\s+/)) {
+      if (cls.startsWith('square-')) { tok = cls.slice(7); break; }
+    }
+    const key = tok && squareFromToken(tok);
+    if (!key) continue;
+    const r = p.getBoundingClientRect();
+    if (r.width < 4 || !r.width) continue;
+    const file = key.charCodeAt(0) - 97 + 1;
+    const rank = parseInt(key.slice(1), 10);
+    const col = flipped ? 8 - file : file - 1;
+    const rowTop = flipped ? rank - 1 : 8 - rank;
+    cells.push({ r, col, rowTop });
+  }
+  if (!cells.length) {
+    const rect = board.getBoundingClientRect();
+    return { left: rect.left, top: rect.top, sq: rect.width / 8, flipped };
+  }
+  const med = (arr) => { const s = [...arr].sort((a, b) => a - b); return s[Math.floor(s.length / 2)]; };
+  const sq = med(cells.map(c => c.r.width));
+  const left = med(cells.map(c => c.r.left - c.col * sq));
+  const top = med(cells.map(c => c.r.top - c.rowTop * sq));
+  return { left, top, sq, flipped };
 }
 
 function clearArrow() {
@@ -229,23 +271,22 @@ function drawArrow(from, to, color) {
   const board = (observedBoard && observedBoard.isConnected) ? observedBoard : findBoard();
   if (!board) return;
 
-  const rect = board.getBoundingClientRect();
-  if (!rect.width || !rect.height) return;
-  const flipped = isBlackOrientation(board);
-  const p1 = squareToUnit(from, flipped);
-  const p2 = squareToUnit(to, flipped);
+  const geo = boardGeometry(board);
+  if (!geo || !(geo.sq > 0)) return;
+  const p1 = squareToUnit(from, geo.flipped);
+  const p2 = squareToUnit(to, geo.flipped);
 
   const dx = p2.x - p1.x;
   const dy = p2.y - p1.y;
   const len = Math.sqrt(dx * dx + dy * dy) || 1;
   const ux = dx / len;
   const uy = dy / len;
-  const headLen = 0.45;
-  const headWidth = 0.44;
+  const headLen = 0.36;
+  const headWidth = 0.34;
   const shaftEndX = p2.x - ux * headLen * 0.6;
   const shaftEndY = p2.y - uy * headLen * 0.6;
-  const tipX = p2.x - ux * 0.12;
-  const tipY = p2.y - uy * 0.12;
+  const tipX = p2.x - ux * 0.1;
+  const tipY = p2.y - uy * 0.1;
   const baseX = tipX - ux * headLen;
   const baseY = tipY - uy * headLen;
   const wingX = baseX - uy * (headWidth / 2);
@@ -259,22 +300,22 @@ function drawArrow(from, to, color) {
   svg.setAttribute('preserveAspectRatio', 'none');
   svg.setAttribute('class', 'chess-ext-arrow');
   svg.style.cssText = 'position:absolute;pointer-events:none;z-index:99998;' +
-    'left:' + (rect.left + window.scrollX) + 'px;top:' + (rect.top + window.scrollY) + 'px;' +
-    'width:' + rect.width + 'px;height:' + rect.height + 'px;';
+    'left:' + (geo.left + window.scrollX) + 'px;top:' + (geo.top + window.scrollY) + 'px;' +
+    'width:' + (geo.sq * 8) + 'px;height:' + (geo.sq * 8) + 'px;';
 
   const line = document.createElementNS(svgNS, 'line');
   line.setAttribute('x1', p1.x); line.setAttribute('y1', p1.y);
   line.setAttribute('x2', shaftEndX); line.setAttribute('y2', shaftEndY);
   line.setAttribute('stroke', color || '#ff6b35');
-  line.setAttribute('stroke-width', '0.17');
+  line.setAttribute('stroke-width', '0.12');
   line.setAttribute('stroke-linecap', 'round');
-  line.setAttribute('opacity', '0.75');
+  line.setAttribute('opacity', '0.72');
 
   const head = document.createElementNS(svgNS, 'polygon');
   head.setAttribute('points',
     tipX + ',' + tipY + ' ' + wingX + ',' + wingY + ' ' + wing2X + ',' + wing2Y);
   head.setAttribute('fill', color || '#ff6b35');
-  head.setAttribute('opacity', '0.78');
+  head.setAttribute('opacity', '0.75');
 
   svg.appendChild(line);
   svg.appendChild(head);
@@ -286,16 +327,17 @@ function showCoords() {
   if (coordsOverlay) return;
   const board = findBoard();
   if (!board) return;
-  const rect = board.getBoundingClientRect();
-  const black = isBlackOrientation(board);
+  const geo = boardGeometry(board);
+  if (!geo || !(geo.sq > 0)) return;
+  const black = geo.flipped;
 
   coordsOverlay = document.createElement('div');
   coordsOverlay.className = 'chess-ext-coords';
-  coordsOverlay.style.cssText = 'position:fixed;pointer-events:none;z-index:99999;left:' + rect.left + 'px;top:' + rect.top + 'px;width:' + rect.width + 'px;height:' + rect.height + 'px;';
+  coordsOverlay.style.cssText = 'position:absolute;pointer-events:none;z-index:99999;left:' + (geo.left + window.scrollX) + 'px;top:' + (geo.top + window.scrollY) + 'px;width:' + (geo.sq * 8) + 'px;height:' + (geo.sq * 8) + 'px;';
 
   const files = black ? 'hgfedcba' : 'abcdefgh';
   const ranks = black ? '12345678' : '87654321';
-  const sqSize = rect.width / 8;
+  const sqSize = geo.sq;
 
   for (let i = 0; i < 8; i++) {
     const fileLabel = document.createElement('span');
