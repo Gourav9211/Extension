@@ -11,6 +11,11 @@ let engineReady = false;
 let engineReadyWaiters = [];
 let pendingEval = null;
 let lastEval = null;
+// UCI has no request ids: track outstanding searches so the bestmove emitted
+// when we stop a superseded evaluation can never be mistaken for the result
+// of the newer one.
+let searchesStarted = 0;
+let bestmovesSeen = 0;
 let settings = { depth: 30, multiPv: 3, sound: true, debounceMs: 500, classify: true, geminiPrompt: '' };
 
 const OPENINGS = {
@@ -178,18 +183,26 @@ function evaluateWithStockfish(fen, multiPv) {
     sfCommand('stop');
     sfCommand('ucinewgame');
     sfCommand('position fen ' + fen);
-    sfCommand('go depth ' + settings.depth + ' multipv ' + multiPv);
+    sfCommand('go depth ' + settings.depth + ' movetime 15000 multipv ' + multiPv);
+    searchesStarted += 1;
   });
 }
 
 function processEngineLine(text) {
   if (text === 'uciok') {
     engineReady = true;
+    searchesStarted = 0;
+    bestmovesSeen = 0;
     for (const w of engineReadyWaiters) w.resolve();
     engineReadyWaiters = [];
     return;
   }
-  if (text.startsWith('bestmove') && pendingEval) {
+  if (text.startsWith('bestmove')) {
+    const outstanding = searchesStarted - bestmovesSeen;
+    bestmovesSeen += 1;
+    // More than one outstanding search means this bestmove belongs to a
+    // superseded (stopped) evaluation - ignore it.
+    if (!pendingEval || outstanding !== 1) return;
     const info = pendingEval;
     pendingEval = null;
     clearTimeout(info.timeout);
@@ -347,6 +360,7 @@ async function handleBoardUpdate(fen, senderTabId) {
         }
       }
     } catch (error) {
+      if (/Superseded/i.test(error.message || '')) return;
       sendAnalysisToPopup({ ok: false, error: error.message });
     }
   }, settings.debounceMs);
