@@ -4,8 +4,14 @@ let observedBoard = null;
 let coordsOverlay = null;
 let coordsVisible = false;
 let lastErrorLogged = '';
+let arrowOverlay = null;
 
 const BOARD_SELECTORS = '[data-board], chess-board, wc-chess-board, .board, [class*="board"]';
+
+function isBlackOrientation(board) {
+  return /orientation-black/.test(board.className || '') ||
+    /orientation-black/.test(board.parentElement?.className || '');
+}
 
 function isValidBoard(el) {
   if (!el || !el.getBoundingClientRect || !el.querySelectorAll) return false;
@@ -51,7 +57,7 @@ function capturePosition() {
     return { fen: directFen, source: 'Chess.com board FEN' };
   }
 
-  const isBlackOrientation = /orientation-black/.test(board.className) || /orientation-black/.test(board.parentElement?.className || '');
+  const flipped = isBlackOrientation(board);
   const pieces = [...board.querySelectorAll('.piece')];
   const squares = new Map();
   const piecePattern = /\b([wb])([prnbqk])\b/;
@@ -60,7 +66,7 @@ function capturePosition() {
     const pieceMatch = piece.className.match(piecePattern);
     const squareMatch = piece.className.match(/square-(\d+)/);
     if (!pieceMatch || !squareMatch) continue;
-    squares.set(squareFromClass(Number(squareMatch[1]), isBlackOrientation), pieceMatch[1] + pieceMatch[2]);
+    squares.set(squareFromClass(Number(squareMatch[1]), flipped), pieceMatch[1] + pieceMatch[2]);
   }
 
   if (!squares.size) {
@@ -110,19 +116,93 @@ function sendFenUpdate() {
   }
 }
 
+function clearArrow() {
+  if (arrowOverlay) {
+    arrowOverlay.remove();
+    arrowOverlay = null;
+  }
+}
+
+function squareToUnit(square, flipped) {
+  const file = square.charCodeAt(0) - 97;
+  const rank = parseInt(square[1], 10);
+  const col = flipped ? 7 - file : file;
+  const row = flipped ? rank - 1 : 8 - rank;
+  return { x: col + 0.5, y: row + 0.5 };
+}
+
+function drawArrow(from, to, color) {
+  if (!/^[a-h][1-8]$/.test(from) || !/^[a-h][1-8]$/.test(to)) return;
+  clearArrow();
+  const board = (observedBoard && observedBoard.isConnected) ? observedBoard : findBoard();
+  if (!board) return;
+
+  const rect = board.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const flipped = isBlackOrientation(board);
+  const p1 = squareToUnit(from, flipped);
+  const p2 = squareToUnit(to, flipped);
+
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  const headLen = 0.45;
+  const headWidth = 0.44;
+  const shaftEndX = p2.x - ux * headLen * 0.6;
+  const shaftEndY = p2.y - uy * headLen * 0.6;
+  const tipX = p2.x - ux * 0.12;
+  const tipY = p2.y - uy * 0.12;
+  const baseX = tipX - ux * headLen;
+  const baseY = tipY - uy * headLen;
+  const wingX = baseX - uy * (headWidth / 2);
+  const wingY = baseY + ux * (headWidth / 2);
+  const wing2X = baseX + uy * (headWidth / 2);
+  const wing2Y = baseY - ux * (headWidth / 2);
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('viewBox', '0 0 8 8');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('class', 'chess-ext-arrow');
+  svg.style.cssText = 'position:absolute;pointer-events:none;z-index:99998;' +
+    'left:' + (rect.left + window.scrollX) + 'px;top:' + (rect.top + window.scrollY) + 'px;' +
+    'width:' + rect.width + 'px;height:' + rect.height + 'px;';
+
+  const line = document.createElementNS(svgNS, 'line');
+  line.setAttribute('x1', p1.x); line.setAttribute('y1', p1.y);
+  line.setAttribute('x2', shaftEndX); line.setAttribute('y2', shaftEndY);
+  line.setAttribute('stroke', color || '#ff6b35');
+  line.setAttribute('stroke-width', '0.17');
+  line.setAttribute('stroke-linecap', 'round');
+  line.setAttribute('opacity', '0.75');
+
+  const head = document.createElementNS(svgNS, 'polygon');
+  head.setAttribute('points',
+    tipX + ',' + tipY + ' ' + wingX + ',' + wingY + ' ' + wing2X + ',' + wing2Y);
+  head.setAttribute('fill', color || '#ff6b35');
+  head.setAttribute('opacity', '0.78');
+
+  svg.appendChild(line);
+  svg.appendChild(head);
+  document.body.appendChild(svg);
+  arrowOverlay = svg;
+}
+
 function showCoords() {
   if (coordsOverlay) return;
   const board = findBoard();
   if (!board) return;
   const rect = board.getBoundingClientRect();
-  const isBlackOrientation = /orientation-black/.test(board.className) || /orientation-black/.test(board.parentElement?.className || '');
+  const black = isBlackOrientation(board);
 
   coordsOverlay = document.createElement('div');
   coordsOverlay.className = 'chess-ext-coords';
   coordsOverlay.style.cssText = 'position:fixed;pointer-events:none;z-index:99999;left:' + rect.left + 'px;top:' + rect.top + 'px;width:' + rect.width + 'px;height:' + rect.height + 'px;';
 
-  const files = isBlackOrientation ? 'hgfedcba' : 'abcdefgh';
-  const ranks = isBlackOrientation ? '12345678' : '87654321';
+  const files = black ? 'hgfedcba' : 'abcdefgh';
+  const ranks = black ? '12345678' : '87654321';
   const sqSize = rect.width / 8;
 
   for (let i = 0; i < 8; i++) {
@@ -212,8 +292,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'draw-arrow') {
+    drawArrow(message.from, message.to, message.color);
+    sendResponse({ ok: true });
+    return true;
+  }
+
   if (message.type === 'stop-monitoring') {
     stopObserving();
+    clearArrow();
     sendResponse({ ok: true });
     return true;
   }

@@ -318,22 +318,34 @@ function sendAnalysisToPopup(result) {
   chrome.runtime.sendMessage(Object.assign({ type: 'analysis-result' }, result)).catch(function() {});
 }
 
-async function handleBoardUpdate(fen) {
+async function handleBoardUpdate(fen, senderTabId) {
   if (analysisTimeout) clearTimeout(analysisTimeout);
   analysisTimeout = setTimeout(async function() {
     try {
       const result = await analyzePosition(fen);
       sendAnalysisToPopup(result);
-      const bestMove = result.engine.moves[0].move;
-      chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
-        if (tabs[0] && tabs[0].id) {
-          chrome.tabs.sendMessage(tabs[0].id, {
+      const top = result.engine.moves[0];
+      let uci = top.uci || top.move || '';
+      if (!/^[a-h][1-8][a-h][1-8]/.test(uci)) {
+        uci = (top.line || '').split(' ')[0];
+      }
+      if (/^[a-h][1-8][a-h][1-8]/.test(uci)) {
+        const sendArrow = function(tabId) {
+          if (!tabId) return;
+          chrome.tabs.sendMessage(tabId, {
             type: 'draw-arrow',
-            from: bestMove.substring(0, 2), to: bestMove.substring(2, 4),
+            from: uci.substring(0, 2), to: uci.substring(2, 4),
             color: '#ff6b35'
           }).catch(function() {});
+        };
+        if (senderTabId) {
+          sendArrow(senderTabId);
+        } else {
+          chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
+            sendArrow(tabs[0] && tabs[0].id);
+          });
         }
-      });
+      }
     } catch (error) {
       sendAnalysisToPopup({ ok: false, error: error.message });
     }
@@ -399,7 +411,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message.type === 'board-update') {
-    handleBoardUpdate(message.fen);
+    handleBoardUpdate(message.fen, _sender && _sender.tab && _sender.tab.id);
     return false;
   }
   if (message.type === 'export-pgn') {
