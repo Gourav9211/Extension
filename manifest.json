@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Chess Position Analyst",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "Real-time chess analysis with local Stockfish engine, AI explanations, board highlights, and game archive.",
   "permissions": ["storage", "activeTab", "downloads", "offscreen", "debugger"],
   "content_security_policy": {

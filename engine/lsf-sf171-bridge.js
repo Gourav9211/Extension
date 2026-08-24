@@ -14,8 +14,10 @@ onmessage = function(e) {
 
 function report(msg) { postMessage('info string [bridge] ' + msg); }
 
+// Module workers do NOT receive the 'chrome' namespace, so resolve nets
+// relative to this script's own URL instead of chrome.runtime.getURL().
 async function loadNet(name) {
-  const resp = await fetch(chrome.runtime.getURL('engine/' + name));
+  const resp = await fetch(new URL(name, import.meta.url));
   if (!resp.ok) throw new Error(name + ': HTTP ' + resp.status);
   return new Uint8Array(await resp.arrayBuffer());
 }
