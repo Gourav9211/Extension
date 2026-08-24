@@ -2,15 +2,19 @@ const GEMINI_MODEL = 'gemini-2.0-flash';
 const TABLEBASE_URL = 'https://tablebase.lichess.ovh/standard';
 const CACHE_TTL = 60000;
 const MAX_CACHE_SIZE = 50;
-// Auto-play humaniser: roughly one move in five, when the position is quiet
-// (no mate in sight, evaluation within +-1.5 pawns, no tablebase verdict),
-// the engine's top choice is swapped for one of its alternative lines - a
-// plausible "normal" move - delivered after a random think time always kept
-// below ten seconds. Critical positions always get the engine's best.
+// Auto-play humaniser: every auto-played move first waits a random 2.5-4s,
+// and one move in three crosses 5s (up to just under 10s), so delivery never
+// looks instant. On top of that, roughly one move in five, when the position
+// is quiet (no mate in sight, evaluation within +-1.5 pawns, no tablebase
+// verdict), swaps the engine's top choice for one of its alternative lines -
+// a plausible "normal" move. Critical positions always get the engine's best.
 const AUTO_NORMAL_ONE_IN = 5;
 const AUTO_NORMAL_MAX_EVAL_CP = 150;
-const AUTO_DELAY_MIN_MS = 2000;
-const AUTO_DELAY_MAX_MS = 10000;
+const AUTO_DELAY_MIN_MS = 2500;
+const AUTO_DELAY_MAX_MS = 4000;
+const AUTO_SLOW_ONE_IN = 3;
+const AUTO_SLOW_MIN_MS = 5500;
+const AUTO_SLOW_MAX_MS = 10000;
 
 let analysisTimeout = null;
 let positionCache = new Map();
@@ -701,10 +705,18 @@ function isQuietPosition(engine) {
   return Math.abs(topCp) <= AUTO_NORMAL_MAX_EVAL_CP;
 }
 
+// Think time for every auto-played move: a random 2.5-4s baseline, with one
+// move in three crossing 5s (uniform up to just under ten seconds).
+function autoPlayDelay() {
+  if (Math.floor(Math.random() * AUTO_SLOW_ONE_IN) === 0) {
+    return AUTO_SLOW_MIN_MS + Math.floor(Math.random() * (AUTO_SLOW_MAX_MS - AUTO_SLOW_MIN_MS));
+  }
+  return AUTO_DELAY_MIN_MS + Math.floor(Math.random() * (AUTO_DELAY_MAX_MS - AUTO_DELAY_MIN_MS));
+}
+
 // Rolls the 1-in-5 chance and, on a hit, returns one of the engine's
-// alternative lines (its 2nd/3rd choice - a "normal" move) plus a random
-// think time below ten seconds. Returns null whenever anything about the
-// situation says "play the best move".
+// alternative lines (its 2nd/3rd choice - a "normal" move). Returns null
+// whenever anything about the situation says "play the best move".
 function decideAutoPlayDeviation(result, bestUci) {
   const engine = result.engine;
   if (!isQuietPosition(engine)) return null;
@@ -724,12 +736,8 @@ function decideAutoPlayDeviation(result, bestUci) {
   }
   if (!alternatives.length) return null;
   const uci = alternatives[Math.floor(Math.random() * alternatives.length)];
-  // Uniform think time in [min, max): always strictly below ten seconds.
-  const delayMs = AUTO_DELAY_MIN_MS +
-    Math.floor(Math.random() * (AUTO_DELAY_MAX_MS - AUTO_DELAY_MIN_MS));
-  logAnalysis('auto-play normal move ' + uci + ' (engine said ' + bestKey + '), playing in ' +
-    (delayMs / 1000).toFixed(1) + 's');
-  return { uci: uci, delayMs: delayMs };
+  logAnalysis('auto-play normal move ' + uci + ' (engine said ' + bestKey + ')');
+  return { uci: uci };
 }
 
 async function handleBoardUpdate(fen, senderTabId) {
@@ -747,14 +755,15 @@ async function handleBoardUpdate(fen, senderTabId) {
       if (!/^[a-h][1-8][a-h][1-8]/.test(uci)) {
         uci = (top.line || '').split(' ')[0];
       }
-      // Auto-play humaniser: only the played move is swapped; the popup
-      // keeps showing the engine's real best line.
+      // Auto-play humaniser: every played move gets a randomised think
+      // time; only a deviating move is swapped, the popup keeps showing the
+      // engine's real best line.
       let playDelayMs = 0;
       if (settings.autoPlay && /^[a-h][1-8][a-h][1-8]/.test(uci)) {
+        playDelayMs = autoPlayDelay();
         const deviation = decideAutoPlayDeviation(result, uci);
         if (deviation) {
           uci = deviation.uci;
-          playDelayMs = deviation.delayMs;
         }
       }
       if (/^[a-h][1-8][a-h][1-8]/.test(uci)) {
