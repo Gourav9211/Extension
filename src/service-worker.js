@@ -2,6 +2,8 @@ const GEMINI_MODEL = 'gemini-2.0-flash';
 const TABLEBASE_URL = 'https://tablebase.lichess.ovh/standard';
 const CACHE_TTL = 60000;
 const MAX_CACHE_SIZE = 50;
+// Board square part of the initial position - marks a fresh game.
+const START_PLACEMENT = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR';
 // Release checks: on every start (and at most once per hour afterwards) the
 // extension compares its manifest version against the latest GitHub release,
 // so the popup can offer the update button.
