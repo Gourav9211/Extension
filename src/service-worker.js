@@ -189,8 +189,10 @@ function evaluateWithStockfish(fen, multiPv) {
     sfCommand('stop');
     sfCommand('position fen ' + fen);
     // movetime caps the search so a position never hangs the UI; depth is
-    // the usual stopping criterion on easy positions.
-    sfCommand('go depth ' + settings.depth + ' movetime 5000 multipv ' + multiPv);
+    // the usual stopping criterion on easy positions. Complex middlegames
+    // will legitimately stop at a lower reached-depth - that is the time
+    // budget doing its job, not a bug.
+    sfCommand('go depth ' + settings.depth + ' movetime 8000 multipv ' + multiPv);
     searchesStarted += 1;
   });
 }
@@ -220,8 +222,16 @@ function processEngineLine(text) {
     searchesStarted = 0;
     bestmovesSeen = 0;
     logEngine('ready (uciok)');
-    // Reset transposition tables exactly once per engine boot. Never between
-    // searches: keeping the hash warm across moves is a major speed win.
+    // Stockfish defaults to ONE search thread regardless of what the build
+    // supports - opt into the cores this machine actually has. Unknown
+    // options (single-threaded fallback builds) are ignored by the engine.
+    const threads = Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1));
+    logEngine('using ' + threads + ' thread(s), hash 128 MB');
+    sfCommand('setoption name Threads value ' + threads);
+    sfCommand('setoption name Hash value 128');
+    // Reset transposition tables exactly once per engine boot, AFTER options.
+    // Never between searches: keeping the hash warm across moves is a major
+    // speed win.
     sfCommand('ucinewgame');
     for (const w of engineReadyWaiters) w.resolve();
     engineReadyWaiters = [];
