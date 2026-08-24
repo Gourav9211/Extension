@@ -348,22 +348,58 @@ function dbgSend(target, cmd, params) {
   });
 }
 
-async function debuggerPlay(tabId, points) {
-  lastAutoDebug = { ts: Date.now(), tabId, steps: [] };
-  const dbg = (m) => { lastAutoDebug.steps.push(m); };
-  if (!chrome.debugger || !tabId || !points || points.length !== 2) return { ok: false, reason: 'unavailable' };
+function dbgAttach(target) {
+  return new Promise(function(resolve, reject) {
+    chrome.debugger.attach(target, '1.3', function() {
+      if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+      else resolve();
+    });
+  });
+}
+
+chrome.debugger.onDetach.addListener(function(target) {
+  if (target && typeof target.tabId === 'number') attachedTabs.delete(target.tabId);
+});
+
+// Attaching shows Chrome's debugger infobar, which shrinks the viewport and
+// shifts the board. Coordinates captured before attach would land off-target,
+// so ask the content script for square centers only AFTER attaching.
+async function requestSquarePoints(tabId, from, to) {
+  try {
+    const resp = await Promise.race([
+      chrome.tabs.sendMessage(tabId, { type: 'get-square-points', from: from, to: to }),
+      sleep(1500).then(function() { return null; })
+    ]);
+    if (resp && resp.ok && Array.isArray(resp.points) &&
+        resp.points.every(function(p) { return p && Number.isFinite(p.x) && Number.isFinite(p.y); })) {
+      return resp.points;
+    }
+  } catch (e) {}
+  return null;
+}
+
+async function debuggerPlay(tabId, from, to, fallbackPoints) {
+  lastAutoDebug = { ts: Date.now(), tabId: tabId, steps: [] };
+  const dbg = function(m) { lastAutoDebug.steps.push(m); };
+  const validSq = /^[a-h][1-8]$/;
+  if (!chrome.debugger || !tabId || !validSq.test(from || '') || !validSq.test(to || '')) {
+    return { ok: false, reason: 'unavailable' };
+  }
   const target = { tabId: tabId };
   let attachedHere = false;
   try {
-    await new Promise(function(resolve, reject) {
-      chrome.debugger.attach(target, '1.3', function() {
-        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-        else resolve();
-      });
-    });
+    await dbgAttach(target);
     attachedHere = true;
     attachedTabs.add(tabId);
     dbg('attached');
+    await sleep(400);
+    let points = await requestSquarePoints(tabId, from, to);
+    if (!points && Array.isArray(fallbackPoints) &&
+        fallbackPoints.every(function(p) { return p && Number.isFinite(p.x) && Number.isFinite(p.y); })) {
+      points = fallbackPoints;
+      dbg('stale pre-attach coordinates used');
+    }
+    if (!points) return { ok: false, reason: 'no coordinates for ' + from + to };
     async function press(label, p) {
       await dbgSend(target, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, button: 'none', pointerType: 'mouse' });
       await sleep(60);
@@ -490,9 +526,25 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     (async function() {
       const tabId = _sender && _sender.tab && _sender.tab.id;
       let result = { ok: false, reason: 'no tab' };
-      try { result = await debuggerPlay(tabId, message.points); } catch (e) { result = { ok: false, reason: e.message }; }
-      sendResponse(result);
+      try { result = await debuggerPlay(tabId, message.from, message.to, message.points); }
+      catch (e) { result = { ok: false, reason: e.message }; }
+      try { sendResponse(result); } catch (e) {}
     })();
+    return true;
+  }
+  if (message.type === 'auto-play-failed') {
+    const tabId = _sender && _sender.tab && _sender.tab.id;
+    if (tabId != null && chrome.action) {
+      Promise.all([
+        chrome.action.setBadgeBackgroundColor({ color: '#d64545', tabId: tabId }),
+        chrome.action.setBadgeText({ text: '!', tabId: tabId })
+      ]).then(function() {
+        setTimeout(function() {
+          chrome.action.setBadgeText({ text: '', tabId: tabId }).catch(function() {});
+        }, 6000);
+      }).catch(function() {});
+    }
+    sendResponse({ ok: true });
     return true;
   }
   if (message.type === 'export-pgn') {

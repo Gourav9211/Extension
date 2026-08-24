@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Chess Position Analyst",
-  "version": "0.4.9",
+  "version": "0.5.1",
   "description": "Real-time chess analysis with local Stockfish engine, AI explanations, board highlights, and game archive.",
   "permissions": ["storage", "activeTab", "commands", "downloads", "offscreen", "debugger"],
-  "host_permissions": ["https://generativelanguage.googleapis.com/*"],
+  "host_permissions": ["https://generativelanguage.googleapis.com/*", "https://www.chess.com/*", "https://chess.com/*"],
   "background": {
     "service_worker": "src/service-worker.js",
     "type": "module"

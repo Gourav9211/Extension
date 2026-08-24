@@ -357,6 +357,60 @@ function pressAt(x, y) {
   });
 }
 
+let playBusy = false;
+
+function currentPlacement() {
+  try { return capturePosition().fen.split(' ')[0]; } catch (e) { return null; }
+}
+
+function syntheticFallback(pts) {
+  pressAt(pts[0].x, pts[0].y);
+  setTimeout(() => pressAt(pts[1].x, pts[1].y), 150);
+}
+
+// One auto-play attempt: trusted CDP input via the service worker, with a
+// synthetic-click fallback. After every attempt we re-read the board; if the
+// placement did not change we retry once, then surface a visible failure
+// (console + toolbar badge) instead of silently freezing.
+function attemptAutoPlay(from, to, pts, before, attempt) {
+  if (playBusy) return;
+  playBusy = true;
+  const verify = function(cdpWorked) {
+    playBusy = false;
+    const after = currentPlacement();
+    if (cdpWorked && after && before && after !== before) {
+      console.warn('Chess extension: auto-play verified (' + from + to + ')');
+      return;
+    }
+    if (!cdpWorked && after && before && after !== before) {
+      console.warn('Chess extension: synthetic clicks moved the board (unexpected)');
+      return;
+    }
+    if (attempt < 2) {
+      console.warn('Chess extension: auto-play attempt ' + attempt + ' left the board unchanged, retrying');
+      setTimeout(function() { attemptAutoPlay(from, to, pts, after || before, attempt + 1); }, 400);
+      return;
+    }
+    console.warn('Chess extension: auto-play failed - board did not change. Reload the extension, then check chrome://extensions for errors.');
+    chrome.runtime.sendMessage({ type: 'auto-play-failed' }).catch(function() {});
+  };
+  chrome.runtime.sendMessage({ type: 'auto-play-move', from: from, to: to, points: pts })
+    .then((resp) => {
+      if (!resp || !resp.ok) {
+        console.warn('Chess extension: CDP auto-play unavailable (' + ((resp && resp.reason) || 'no response') + '), using synthetic clicks');
+        syntheticFallback(pts);
+        setTimeout(() => verify(false), 700);
+        return;
+      }
+      setTimeout(() => verify(true), 900);
+    })
+    .catch((err) => {
+      console.warn('Chess extension: CDP auto-play unavailable (' + (err && err.message) + '), using synthetic clicks');
+      syntheticFallback(pts);
+      setTimeout(() => verify(false), 700);
+    });
+}
+
 function playMove(from, to) {
   if (!/^[a-h][1-8]$/.test(from) || !/^[a-h][1-8]$/.test(to)) return;
   const board = (observedBoard && observedBoard.isConnected) ? observedBoard : findBoard();
@@ -369,31 +423,13 @@ function playMove(from, to) {
     console.warn('Chess extension: auto-play skipped, no piece on ' + from);
     return;
   }
-  const centerOf = (sq) => {
-    const p = squareToUnit(sq, geo.flipped);
-    return { x: geo.left + p.x * geo.sq, y: geo.top + p.y * geo.sq };
-  };
-  const a = centerOf(from);
-  const b = centerOf(to);
+  const a = squareCenter(geo, from);
+  const b = squareCenter(geo, to);
   console.warn('Chess extension: auto-playing ' + from + to + ' (' + Math.round(a.x) + ',' + Math.round(a.y) + ')->(' + Math.round(b.x) + ',' + Math.round(b.y) + ')');
+  const before = currentPlacement();
   // chess.com ignores untrusted (synthetic) input for moves, so route
-  // through the service worker's chrome.debugger for real CDP events;
-  // fall back to synthetic clicks if that is unavailable.
-  const fallback = () => {
-    pressAt(a.x, a.y);
-    setTimeout(() => pressAt(b.x, b.y), 150);
-  };
-  chrome.runtime.sendMessage({ type: 'auto-play-move', points: [a, b] })
-    .then((resp) => {
-      if (!resp || !resp.ok) {
-        console.warn('Chess extension: auto-play unavailable (' + ((resp && resp.reason) || 'no response') + '), using synthetic clicks');
-        fallback();
-      }
-    })
-    .catch((err) => {
-      console.warn('Chess extension: auto-play unavailable (' + (err && err.message) + '), using synthetic clicks');
-      fallback();
-    });
+  // through the service worker's chrome.debugger for real CDP events.
+  attemptAutoPlay(from, to, [a, b], before, 1);
 }
 
 function squareToUnit(square, flipped) {
@@ -402,6 +438,11 @@ function squareToUnit(square, flipped) {
   const col = flipped ? 7 - file : file;
   const row = flipped ? rank - 1 : 8 - rank;
   return { x: col + 0.5, y: row + 0.5 };
+}
+
+function squareCenter(geo, sq) {
+  const p = squareToUnit(sq, geo.flipped);
+  return { x: geo.left + p.x * geo.sq, y: geo.top + p.y * geo.sq };
 }
 
 function drawArrow(from, to, color) {
@@ -562,6 +603,23 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'start-monitoring') {
     startObserving();
     sendResponse({ ok: true });
+    return true;
+  }
+
+  if (message.type === 'get-square-points') {
+    try {
+      const from = message.from;
+      const to = message.to;
+      if (!/^[a-h][1-8]$/.test(from || '') || !/^[a-h][1-8]$/.test(to || '')) throw new Error('bad squares');
+      const board = (observedBoard && observedBoard.isConnected) ? observedBoard : findBoard();
+      if (!board) throw new Error('no board');
+      const geo = boardGeometry(board);
+      if (!geo || !(geo.sq > 0)) throw new Error('no board geometry');
+      if (!collectPieces(board).get(from)) throw new Error('no piece on ' + from);
+      sendResponse({ ok: true, points: [squareCenter(geo, from), squareCenter(geo, to)] });
+    } catch (e) {
+      sendResponse({ ok: false, error: e.message });
+    }
     return true;
   }
 

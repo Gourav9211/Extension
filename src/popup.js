@@ -23,11 +23,21 @@ const classifyText = document.querySelector('#classify-text');
 
 let audioCtx = null;
 let evalHistory = [];
+let analyzingTimer = null;
 let settings = { sound: true, coords: true, graph: true, history: true, classify: true };
 
 function setStatus(text, active) {
   statusText.textContent = text;
   statusDot.classList.toggle('active', !!active);
+}
+
+// Never leave "Analyzing..." hanging: if no result lands within 45s the
+// engine is wedged or extremely slow - say so instead of spinning forever.
+function armAnalyzingWatchdog() {
+  clearTimeout(analyzingTimer);
+  analyzingTimer = setTimeout(function() {
+    setStatus('Still analyzing... engine slow or stuck', true);
+  }, 45000);
 }
 
 async function loadSettings() {
@@ -250,6 +260,7 @@ async function refreshHistory() {
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'analysis-result') {
+    clearTimeout(analyzingTimer);
     if (message.ok) {
       renderAnalysis(message);
       refreshHistory();
@@ -284,6 +295,7 @@ async function init() {
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'capture-position' });
     if (response && response.ok) {
       setStatus('Analyzing...', true);
+      armAnalyzingWatchdog();
       noGame.hidden = true;
       await chrome.runtime.sendMessage({ type: 'board-update', fen: response.position.fen });
     } else {
