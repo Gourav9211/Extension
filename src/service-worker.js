@@ -68,7 +68,15 @@ let lastTickTurn = '';
 let opponentPaceMs = 0;
 let opponentMovedAtMs = 0;
 let opponentElo = 0;
+let userColor = '';
 const OPPONENT_GAP_CAP_MS = 300000;
+
+// MV3 wakes the service worker straight INTO a message handler, before the
+// async session-storage restore finishes - so early ticks are buffered until
+// state is back, otherwise the first sample after every wake-up was garbage
+// and matched timing silently degraded to random.
+let paceStateReady = false;
+const pendingTicks = [];
 
 function persistPaceState() {
   chrome.storage.session.set({
@@ -77,7 +85,8 @@ function persistPaceState() {
       lastTickTurn: lastTickTurn,
       opponentPaceMs: opponentPaceMs,
       opponentMovedAtMs: opponentMovedAtMs,
-      opponentElo: opponentElo
+      opponentElo: opponentElo,
+      userColor: userColor
     }
   }).catch(function() {});
 }
@@ -85,21 +94,28 @@ function persistPaceState() {
 (function restorePaceState() {
   chrome.storage.session.get('paceState').then(function(data) {
     const s = data && data.paceState;
-    if (!s) return;
-    // A stale anchor from a previous SW life would make elapsed-time math
-    // think eons have passed; keep only still-plausible values.
-    if (s.lastTickAt && Date.now() - s.lastTickAt < OPPONENT_GAP_CAP_MS) {
+    if (s && s.lastTickAt && Date.now() - s.lastTickAt < OPPONENT_GAP_CAP_MS) {
       lastTickAt = s.lastTickAt;
       lastTickTurn = s.lastTickTurn || '';
       opponentPaceMs = s.opponentPaceMs || 0;
       opponentMovedAtMs = s.opponentMovedAtMs || 0;
       opponentElo = s.opponentElo || 0;
+      userColor = s.userColor || '';
       logAnalysis('restored pace state: ~' + (opponentPaceMs / 1000).toFixed(1) + 's, elo ' + (opponentElo || '?'));
     }
-  }).catch(function() {});
+    paceStateReady = true;
+    while (pendingTicks.length) trackTurnTick.apply(null, pendingTicks.shift());
+  }).catch(function() {
+    paceStateReady = true;
+    while (pendingTicks.length) trackTurnTick.apply(null, pendingTicks.shift());
+  });
 })();
 
-function trackTurnTick(userColor, turn, fen, oppElo) {
+function trackTurnTick(userColor_, turn, fen, oppElo) {
+  if (!paceStateReady) {
+    pendingTicks.push([userColor_, turn, fen, oppElo]);
+    return;
+  }
   // A fresh initial placement means a new game - forget the old pace.
   if ((fen || '').split(' ')[0] === START_PLACEMENT) {
     lastTickAt = 0;
@@ -110,7 +126,8 @@ function trackTurnTick(userColor, turn, fen, oppElo) {
     return;
   }
   if (oppElo >= 100 && oppElo <= 3500) opponentElo = oppElo;
-  const uc = userColor === 'b' ? 'b' : 'w';
+  if (userColor_ === 'w' || userColor_ === 'b') userColor = userColor_;
+  const uc = userColor_ === 'b' ? 'b' : 'w';
   const opp = uc === 'w' ? 'b' : 'w';
   const now = Date.now();
   if (turn === uc) {
@@ -350,7 +367,7 @@ async function queryTablebase(fen) {
   }
 }
 
-function evaluateWithStockfish(fen, multiPv) {
+function evaluateWithStockfish(fen, multiPv, movetimeOverride) {
   return new Promise((resolve, reject) => {
     if (pendingEval) {
       const old = pendingEval;
@@ -358,6 +375,9 @@ function evaluateWithStockfish(fen, multiPv) {
       clearTimeout(old.timeout);
       old.reject(new Error('Superseded by new request'));
     }
+    // Matched timing hands us a smaller budget so the search finishes before
+    // the reply deadline; otherwise the configured move time applies.
+    const movetime = Math.max(400, Math.min(settings.engineMoveTimeMs, movetimeOverride || settings.engineMoveTimeMs));
     const info = { lines: [], resolve: resolve, reject: reject, timeout: null };
     pendingEval = info;
     info.timeout = setTimeout(function() {
@@ -365,7 +385,7 @@ function evaluateWithStockfish(fen, multiPv) {
         pendingEval = null;
         reject(new Error('Engine evaluation timeout'));
       }
-    }, Math.max(18000, settings.depth * 1200, settings.engineMoveTimeMs + 3000));
+    }, Math.max(18000, settings.depth * 1200, movetime + 3000));
     // Only send 'stop' when something is actually running - a stray stop
     // racing a fresh 'go' could truncate the new search.
     if (pendingEval) sfCommand('stop');
@@ -374,7 +394,7 @@ function evaluateWithStockfish(fen, multiPv) {
     // the usual stopping criterion on easy positions. Complex middlegames
     // will legitimately stop at a lower reached-depth - that is the time
     // budget doing its job, not a bug.
-    sfCommand('go depth ' + settings.depth + ' movetime ' + settings.engineMoveTimeMs + ' multipv ' + multiPv);
+    sfCommand('go depth ' + settings.depth + ' movetime ' + movetime + ' multipv ' + multiPv);
     searchesStarted += 1;
   });
 }
@@ -526,7 +546,7 @@ async function analyzePosition(fen, opts) {
 
   if (!engine) {
     const cached = getCached(validated);
-    engine = cached || await evaluateWithStockfish(validated, settings.multiPv);
+    engine = cached || await evaluateWithStockfish(validated, settings.multiPv, opts && opts.movetimeMs);
     if (!cached) setCache(validated, engine);
   }
 
@@ -856,21 +876,6 @@ function legalMovesFromFen(fen) {
 }
 // ---- END LEGAL MOVE GENERATION ----
 
-// A position is "quiet" - no strategy to follow - when nobody has a forced
-// mate on the board, the evaluation is within a small band around equal, and
-// there is no tablebase verdict. Those are the only positions where deviating
-// from the engine's top choice is safe.
-function isQuietPosition(engine) {
-  if (!engine || !Array.isArray(engine.moves) || !engine.moves.length) return false;
-  if (engine.tablebase) return false;
-  for (const line of engine.moves) {
-    if (line.mate != null) return false;
-  }
-  const topCp = engine.moves[0].evaluation;
-  if (topCp == null) return false;
-  return Math.abs(topCp) <= adaptiveParams().evalCp;
-}
-
 // Think time for every auto-played move. In 'match' mode the TOTAL wall-clock
 // time from the opponent's move to our click should be their smoothed pace
 // minus autoBeatByMs (adjusted adaptively by rating) - so analysis time is
@@ -895,14 +900,28 @@ function autoPlayDelay() {
 
 // Rolls the 1-in-N chance and, on a hit, returns one of the engine's
 // alternative lines (its 2nd/3rd choice - a "normal" move). Returns null
-// whenever anything about the situation says "play the best move".
+// whenever anything about the situation says "play the best move". Every
+// skip reason is logged so the console explains why the best move was kept.
 function decideAutoPlayDeviation(result, bestUci) {
   const engine = result.engine;
-  if (!isQuietPosition(engine)) return null;
+  const skip = function(reason) { logAnalysis('deviation skipped: ' + reason); return null; };
+  if (!engine || !Array.isArray(engine.moves) || !engine.moves.length) return skip('no engine lines');
+  if (engine.tablebase) return skip('tablebase position');
+  for (const line of engine.moves) {
+    if (line.mate != null) return skip('mate on the board');
+  }
+  const topCp = engine.moves[0].evaluation;
+  if (topCp == null) return skip('unknown evaluation');
   const params = adaptiveParams();
-  if (params.oneIn < 1 || Math.floor(Math.random() * params.oneIn) !== 0) return null;
+  if (Math.abs(topCp) > params.evalCp) {
+    return skip('eval ' + (topCp / 100).toFixed(1) + ' outside quiet band +-' + (params.evalCp / 100).toFixed(1));
+  }
+  if (params.oneIn < 1 || Math.floor(Math.random() * params.oneIn) !== 0) {
+    return skip('roll missed (1 in ' + params.oneIn + ')' +
+      (opponentElo ? ' vs elo ' + opponentElo : ''));
+  }
   const legal = new Set(legalMovesFromFen(result.fen));
-  if (legal.size < 2) return null;
+  if (legal.size < 2) return skip('only one legal move');
   const bestKey = bestUci.substring(0, 4);
   const seen = new Set();
   const alternatives = [];
@@ -914,9 +933,9 @@ function decideAutoPlayDeviation(result, bestUci) {
     seen.add(u);
     alternatives.push(u);
   }
-  if (!alternatives.length) return null;
+  if (!alternatives.length) return skip('no legal alternative among engine lines');
   const uci = alternatives[Math.floor(Math.random() * alternatives.length)];
-  logAnalysis('auto-play normal move ' + uci + ' (engine said ' + bestKey + ')' +
+  logAnalysis('DEVIATING to ' + uci + ' (engine best ' + bestKey + ')' +
     (opponentElo ? ' vs elo ' + opponentElo : ''));
   return { uci: uci };
 }
@@ -930,8 +949,21 @@ async function handleBoardUpdate(fen, senderTabId) {
         lastTickAt = 0;
         lastTickTurn = '';
         opponentPaceMs = 0;
+        opponentMovedAtMs = 0;
       }
-      const result = await analyzePosition(fen, { explain: 'async' });
+      // In matched mode, shrink the engine's time budget so the search can
+      // finish inside the reply deadline instead of blowing past it.
+      let movetimeMs;
+      if (settings.autoTimingMode === 'match' && settings.autoPlay &&
+          opponentPaceMs > 0 && opponentMovedAtMs > 0) {
+        const beat = (settings.autoBeatByMs || 0) + adaptiveParams().beatDeltaMs;
+        const target = Math.max(700, Math.min(120000, opponentPaceMs - beat));
+        movetimeMs = Math.max(500, Math.min(settings.engineMoveTimeMs,
+          target - (Date.now() - opponentMovedAtMs) - 250));
+        logAnalysis('match budget ' + Math.round(movetimeMs) + 'ms' +
+          ' (target ' + (target / 1000).toFixed(1) + 's)');
+      }
+      const result = await analyzePosition(fen, { explain: 'async', movetimeMs: movetimeMs });
       logAnalysis(result.fen.split(' ')[0] + ' depth ' + result.engine.depth + ' in ' +
         ((Date.now() - t0) / 1000).toFixed(1) + 's' +
         (result.engine.tablebase ? ' (tablebase)' : ' (budget ' + settings.engineMoveTimeMs + 'ms, cap depth ' + settings.depth + ')'));
@@ -1031,16 +1063,173 @@ async function handleBoardUpdate(fen, senderTabId) {
   }, settings.debounceMs);
 }
 
-function generatePGN() {
-  if (!gameHistory.length) return '';
-  const dateStr = new Date().toISOString().split('T')[0];
-  let pgn = '[Event "Live Analysis"]\n[Site "Chess Analyst"]\n[Date "' + dateStr + '"]\n[White "User"]\n[Black "Engine"]\n\n';
-  const moves = gameHistory.filter(function(g) { return g.bestMove; });
-  for (let i = 0; i < moves.length; i++) {
-    if (i % 2 === 0) pgn += (Math.floor(i / 2) + 1) + '. ';
-    pgn += moves[i].bestMove + ' ';
+// ---- Full-game PGN reconstruction ----
+// History snapshots only exist for the user's turns; consecutive snapshots
+// are exactly one full move apart (ours + theirs), so both sides' moves can
+// be recovered by searching legal moves whose resulting placement matches
+// the next snapshot - then rendered in SAN.
+
+function placementKey(fen) { return fen.split(' ')[0]; }
+
+function gridToFen(grid, turn) {
+  let rows = '';
+  for (let r = 0; r < 8; r++) {
+    let empty = 0;
+    for (let f = 0; f < 8; f++) {
+      const p = grid[r][f];
+      if (!p) { empty += 1; continue; }
+      if (empty) { rows += empty; empty = 0; }
+      rows += p;
+    }
+    if (empty) rows += empty;
+    if (r < 7) rows += '/';
   }
-  return pgn.trim();
+  return rows + ' ' + turn + ' - - 0 1';
+}
+
+function applyUciToGrid(grid, uci) {
+  const g = grid.map(function(row) { return row.slice(); });
+  const ff = uci.charCodeAt(0) - 97;
+  const fr = 8 - parseInt(uci[1], 10);
+  const tf = uci.charCodeAt(2) - 97;
+  const tr = 8 - parseInt(uci[3], 10);
+  const piece = g[fr][ff];
+  if (!piece) return g;
+  const promo = uci[4];
+  g[tr][tf] = promo ? (pieceSide(piece) === 'w' ? promo.toUpperCase() : promo) : piece;
+  g[fr][ff] = null;
+  const t = piece.toLowerCase();
+  if ((t === 'p') && ff !== tf && !g[tr][tf]) g[fr][tf] = null; // en passant capture
+  if (t === 'k' && Math.abs(tf - ff) === 2) {
+    if (tf === 6) { g[tr][5] = g[tr][7]; g[tr][7] = null; }
+    else { g[tr][3] = g[tr][0]; g[tr][0] = null; }
+  }
+  return g;
+}
+
+function sanFor(fen, uci) {
+  try {
+    const pos = parseGrid(fen);
+    const grid = pos.grid;
+    const ff = uci.charCodeAt(0) - 97;
+    const fr = 8 - parseInt(uci[1], 10);
+    const tf = uci.charCodeAt(2) - 97;
+    const tr = 8 - parseInt(uci[3], 10);
+    const piece = grid[fr] && grid[fr][ff];
+    if (!piece) return uci;
+    const t = piece.toLowerCase();
+    const isCapture = !!grid[tr][tf] || (t === 'p' && ff !== tf);
+    let san;
+    if (t === 'k' && Math.abs(tf - ff) === 2) {
+      san = tf === 6 ? 'O-O' : 'O-O-O';
+    } else if (t === 'p') {
+      san = (isCapture ? String.fromCharCode(97 + ff) + 'x' : '') + squareName(tr, tf);
+      if (uci[4]) san += '=' + uci[4].toUpperCase();
+    } else {
+      // Disambiguation: other identical pieces with a legal move to the same
+      // target square. File beats rank in SAN precedence.
+      const rivals = [];
+      for (const u of legalMovesFromFen(fen)) {
+        if (u.substring(2, 4) !== uci.substring(2, 4)) continue;
+        if (u === uci || u.substring(0, 4) === uci.substring(0, 4)) continue;
+        const of = u.charCodeAt(0) - 97;
+        const or = 8 - parseInt(u[1], 10);
+        if (grid[or][of] === piece) rivals.push(u);
+      }
+      san = piece.toUpperCase();
+      if (rivals.length) {
+        const sharesFile = rivals.some(function(u) { return (u.charCodeAt(0) - 97) === ff; });
+        const sharesRank = rivals.some(function(u) { return (8 - parseInt(u[1], 10)) === fr; });
+        if (!sharesFile) san += String.fromCharCode(97 + ff);
+        else if (!sharesRank) san += String(8 - fr);
+        else san += squareName(fr, ff);
+      }
+      if (isCapture) san += 'x';
+      san += squareName(tr, tf);
+    }
+    const after = applyUciToGrid(grid, uci);
+    const enemyKing = findKing(after, pos.turn === 'w' ? 'b' : 'w');
+    if (enemyKing && isAttacked(after, enemyKing[0], enemyKing[1], pos.turn)) san += '+';
+    return san;
+  } catch (e) {
+    return uci;
+  }
+}
+
+// Finds the one or two plies that turn prevFen into curFen (our move plus,
+// usually, the opponent's reply). Returns [{fen, uci, mover}, ...].
+function derivePliesBetween(prevFen, curFen) {
+  try {
+    const startGrid = parseGrid(prevFen).grid;
+    const turn1 = parseGrid(prevFen).turn;
+    const turn2 = turn1 === 'w' ? 'b' : 'w';
+    const targetKey = placementKey(curFen);
+    for (const u1 of legalMovesFromFen(prevFen)) {
+      const g1 = applyUciToGrid(startGrid, u1);
+      if (placementKey(gridToFen(g1, turn2)) === targetKey) {
+        return [{ fen: prevFen, uci: u1, mover: turn1 }];
+      }
+      const midFen = gridToFen(g1, turn2);
+      for (const u2 of legalMovesFromFen(midFen)) {
+        if (placementKey(gridToFen(applyUciToGrid(g1, u2), turn1)) === targetKey) {
+          return [
+            { fen: prevFen, uci: u1, mover: turn1 },
+            { fen: midFen, uci: u2, mover: turn2 }
+          ];
+        }
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+function buildGamePlies() {
+  const plies = [];
+  let prev = null;
+  for (const entry of gameHistory) {
+    if (!prev) {
+      // As Black the first snapshot misses White's opening move - seed from
+      // the initial position so the export starts at ply one.
+      if (userColor === 'b') {
+        const pair = derivePliesBetween(START_PLACEMENT + ' w KQkq - 0 1', entry.fen);
+        if (pair) Array.prototype.push.apply(plies, pair);
+      }
+    } else {
+      const pair = derivePliesBetween(prev, entry.fen);
+      if (pair) Array.prototype.push.apply(plies, pair);
+    }
+    prev = entry.fen;
+  }
+  return plies;
+}
+
+function generatePGN() {
+  const plies = buildGamePlies();
+  if (!plies.length) return '';
+  let text = '';
+  let moveNo = 1;
+  let awaitingBlack = false;
+  for (const ply of plies) {
+    const san = sanFor(ply.fen, ply.uci);
+    if (ply.mover === 'w') {
+      text += (text ? ' ' : '') + moveNo + '. ' + san;
+      awaitingBlack = true;
+    } else if (awaitingBlack) {
+      text += ' ' + san;
+      moveNo += 1;
+      awaitingBlack = false;
+    } else {
+      text += (text ? ' ' : '') + moveNo + '... ' + san;
+      moveNo += 1;
+    }
+  }
+  const playerName = 'Player';
+  const opponentName = 'Opponent';
+  return '[Event "Live Analysis"]\n[Site "Chess Analyst"]\n[Date "' +
+    new Date().toISOString().split('T')[0] + '"]\n' +
+    '[White "' + (userColor === 'b' ? opponentName : playerName) + '"]\n' +
+    '[Black "' + (userColor === 'b' ? playerName : opponentName) + '"]\n\n' +
+    text.trim();
 }
 
 function calculateAccuracy() {
@@ -1062,10 +1251,11 @@ function calculateAccuracy() {
 async function saveGameToArchive() {
   if (gameHistory.length < 2) return;
   const accuracy = calculateAccuracy();
+  const plies = buildGamePlies();
   const { gameArchive = [] } = await chrome.storage.local.get('gameArchive');
   gameArchive.push({
     timestamp: Date.now(),
-    moves: gameHistory.map(function(g) { return g.bestMove; }),
+    moves: plies.map(function(p) { return sanFor(p.fen, p.uci); }),
     evals: gameHistory.map(function(g) { return g.eval; }),
     accuracy: accuracy
   });
