@@ -839,12 +839,41 @@ async function handleBoardUpdate(fen, senderTabId) {
         }
       }
       if (/^[a-h][1-8][a-h][1-8]/.test(uci)) {
+        // Ranked arrows: best (orange) plus 2nd/3rd choices in their own
+        // colours, each badged over the line. Auto-play always rides the
+        // best move via the from/to/play fields regardless of deviations.
+        const RANK_STYLES = [
+          { color: '#ff6b35', label: 'BEST' },
+          { color: '#2ecc71', label: '2ND' },
+          { color: '#3498db', label: '3RD' }
+        ];
+        const arrows = [];
+        const seenSquares = new Set();
+        for (let i = 0; i < Math.min(3, result.engine.moves.length); i++) {
+          const line = result.engine.moves[i];
+          let u = line.uci || line.move || '';
+          if (!/^[a-h][1-8][a-h][1-8]/.test(u)) u = (line.line || '').split(' ')[0];
+          if (!/^[a-h][1-8][a-h][1-8]/.test(u)) continue;
+          const key = u.substring(0, 4);
+          if (seenSquares.has(key)) continue;
+          seenSquares.add(key);
+          arrows.push({
+            from: u.substring(0, 2),
+            to: u.substring(2, 4),
+            color: RANK_STYLES[i].color,
+            label: RANK_STYLES[i].label
+          });
+        }
+        if (!arrows.some(a => a.from + a.to === uci.substring(0, 4))) {
+          arrows.unshift({ from: uci.substring(0, 2), to: uci.substring(2, 4), color: '#ff6b35', label: 'BEST' });
+        }
         const sendArrow = function(tabId) {
           if (!tabId) return;
           chrome.tabs.sendMessage(tabId, {
             type: 'draw-arrow',
             from: uci.substring(0, 2), to: uci.substring(2, 4),
             color: '#ff6b35',
+            arrows: arrows,
             play: !!settings.autoPlay,
             playDelayMs: playDelayMs
           }).catch(function() {});

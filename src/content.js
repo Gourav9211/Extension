@@ -5,7 +5,6 @@ let observedBoard = null;
 let coordsOverlay = null;
 let coordsVisible = false;
 let lastErrorLogged = '';
-let arrowOverlay = null;
 
 const BOARD_SELECTORS = '[data-board], chess-board, wc-chess-board, .board, [class*="board"]';
 
@@ -336,9 +335,8 @@ function boardGeometry(board) {
 }
 
 function clearArrow() {
-  if (arrowOverlay) {
-    arrowOverlay.remove();
-    arrowOverlay = null;
+  for (const el of document.querySelectorAll('.chess-ext-arrow, .chess-ext-arrow-label')) {
+    el.remove();
   }
 }
 
@@ -515,9 +513,8 @@ function squareCenter(geo, sq) {
   return { x: geo.left + p.x * geo.sq, y: geo.top + p.y * geo.sq };
 }
 
-function drawArrow(from, to, color) {
+function drawArrow(from, to, color, label) {
   if (!/^[a-h][1-8]$/.test(from) || !/^[a-h][1-8]$/.test(to)) return;
-  clearArrow();
   const board = (observedBoard && observedBoard.isConnected) ? observedBoard : findBoard();
   if (!board) return;
 
@@ -570,7 +567,27 @@ function drawArrow(from, to, color) {
   svg.appendChild(line);
   svg.appendChild(head);
   document.body.appendChild(svg);
-  arrowOverlay = svg;
+
+  // Optional rank badge ("BEST" / "2ND" / "3RD") floating over the shaft,
+  // nudged perpendicular so it never sits exactly on the line.
+  if (label) {
+    const mx = (p1.x + p2.x) / 2;
+    const my = (p1.y + p2.y) / 2;
+    const off = 0.55;
+    const lx = geo.left + (mx - uy * off) * geo.sq + window.scrollX;
+    const ly = geo.top + (my + ux * off) * geo.sq + window.scrollY;
+    const tag = document.createElement('div');
+    tag.className = 'chess-ext-arrow-label';
+    tag.textContent = label;
+    tag.style.cssText = 'position:absolute;pointer-events:none;z-index:99999;' +
+      'left:' + Math.round(lx) + 'px;top:' + Math.round(ly) + 'px;' +
+      'transform:translate(-50%,-50%);' +
+      'font:bold 10px/1 ui-sans-serif,system-ui,sans-serif;letter-spacing:.5px;' +
+      'color:#fff;background:' + (color || '#ff6b35') + ';' +
+      'padding:2px 6px;border-radius:8px;opacity:0.92;' +
+      'box-shadow:0 1px 3px rgba(0,0,0,0.4);';
+    document.body.appendChild(tag);
+  }
 }
 
 function showCoords() {
@@ -700,7 +717,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === 'draw-arrow') {
-    drawArrow(message.from, message.to, message.color);
+    // One message can now carry several ranked arrows; the plain from/to/
+    // color fields remain the best move and keep driving auto-play.
+    clearArrow();
+    const arrows = Array.isArray(message.arrows) && message.arrows.length
+      ? message.arrows
+      : [{ from: message.from, to: message.to, color: message.color }];
+    for (const a of arrows) {
+      if (a && /^[a-h][1-8]$/.test(a.from || '') && /^[a-h][1-8]$/.test(a.to || '')) {
+        drawArrow(a.from, a.to, a.color, a.label);
+      }
+    }
     if (message.play && !extensionDead && isUsersTurnNow()) {
       cancelPendingPlay();
       const delayMs = Number.isFinite(message.playDelayMs) ? Math.max(0, message.playDelayMs) : 0;
