@@ -1,4 +1,5 @@
 let lastFen = '';
+let lastTickFen = '';
 let lastWarmFen = '';
 let observer = null;
 let observedBoard = null;
@@ -284,6 +285,13 @@ function sendFenUpdate() {
       if (parts[1] !== stm) {
         parts[1] = stm;
         position.fen = parts.join(' ');
+      }
+      // Pace telemetry: one tick per newly seen side-to-move, for both
+      // turns. The service worker times the gap between an opponent-to-move
+      // tick and our-to-move tick to learn how fast the opponent plays.
+      if (stm && position.fen !== lastTickFen) {
+        lastTickFen = position.fen;
+        trySend({ type: 'turn-tick', userColor: userColor, turn: stm, fen: position.fen });
       }
     }
 

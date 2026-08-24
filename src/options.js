@@ -13,6 +13,8 @@ const DEFAULTS = {
   geminiPrompt: '',
   debounceMs: 500,
   engineMoveTimeMs: 8000,
+  autoTimingMode: 'match',
+  autoBeatByMs: 1000,
   autoDelayMinMs: 2500,
   autoDelayMaxMs: 4000,
   autoSlowOneIn: 3,

@@ -16,6 +16,8 @@ const UPDATE_CHECK_INTERVAL_MS = 3600000;
 // its alternative lines - a plausible "normal" move. Critical positions
 // always get the engine's best.
 const AUTO_DEFAULTS = {
+  autoTimingMode: 'match',
+  autoBeatByMs: 1000,
   autoDelayMinMs: 2500,
   autoDelayMaxMs: 4000,
   autoSlowMinMs: 5500,
@@ -47,6 +49,36 @@ function randMs(min, max) {
   const lo = Math.min(min, max);
   const hi = Math.max(min, max);
   return lo + Math.floor(Math.random() * (hi - lo + 1));
+}
+
+// Opponent pace tracking: the content script sends a 'turn-tick' for every
+// newly seen side-to-move. The gap between an opponent-to-move tick and the
+// following our-to-move tick is (roughly) how long the opponent thought.
+// Samples are EMA-smoothed and reset when a fresh game starts; gaps over
+// five minutes are discarded (background-tab throttling, not real thinking).
+let lastTickAt = 0;
+let lastTickTurn = '';
+let opponentPaceMs = 0;
+const OPPONENT_GAP_CAP_MS = 300000;
+
+function trackTurnTick(userColor, turn, fen) {
+  // A fresh initial placement means a new game - forget the old pace.
+  if ((fen || '').split(' ')[0] === START_PLACEMENT) {
+    lastTickAt = 0;
+    lastTickTurn = '';
+    opponentPaceMs = 0;
+    return;
+  }
+  const uc = userColor === 'b' ? 'b' : 'w';
+  const opp = uc === 'w' ? 'b' : 'w';
+  const now = Date.now();
+  const gap = lastTickAt ? now - lastTickAt : 0;
+  if (turn === uc && lastTickTurn === opp && gap > 0 && gap <= OPPONENT_GAP_CAP_MS) {
+    opponentPaceMs = opponentPaceMs ? Math.round(opponentPaceMs * 0.6 + gap * 0.4) : gap;
+    logAnalysis('opponent pace ~' + (opponentPaceMs / 1000).toFixed(1) + 's');
+  }
+  lastTickAt = now;
+  lastTickTurn = turn || '';
 }
 
 // Lifecycle diagnostics visible in the service worker console
@@ -135,6 +167,7 @@ async function loadSettings() {
   if (stored.sound != null) settings.sound = stored.sound;
   if (stored.classify != null) settings.classify = stored.classify;
   if (stored.geminiPrompt != null) settings.geminiPrompt = stored.geminiPrompt;
+  if (stored.autoTimingMode === 'match' || stored.autoTimingMode === 'random') settings.autoTimingMode = stored.autoTimingMode;
   for (const key of Object.keys(AUTO_DEFAULTS)) {
     const v = parseInt(stored[key], 10);
     if (!isNaN(v) && v > 0) settings[key] = v;
@@ -774,10 +807,16 @@ function isQuietPosition(engine) {
   return Math.abs(topCp) <= settings.autoNormalEvalCp;
 }
 
-// Think time for every auto-played move: a random baseline window, with one
-// move in autoSlowOneIn crossing the slow band instead (0 disables the slow
-// band entirely).
+// Think time for every auto-played move. In 'match' mode the move lands one
+// autoBeatByMs quicker than the opponent's smoothed pace (clamped to a safe
+// floor so we never answer instantly); until the opponent has been timed -
+// or in 'random' mode - a random baseline window is used, with one move in
+// autoSlowOneIn crossing the slow band instead (0 disables the slow band).
 function autoPlayDelay() {
+  if (settings.autoTimingMode === 'match' && opponentPaceMs > 0) {
+    const target = opponentPaceMs - (settings.autoBeatByMs || 0);
+    return Math.max(700, Math.min(120000, target));
+  }
   const slowOneIn = settings.autoSlowOneIn;
   if (slowOneIn >= 1 && Math.floor(Math.random() * slowOneIn) === 0) {
     return randMs(settings.autoSlowMinMs, settings.autoSlowMaxMs);
@@ -817,6 +856,11 @@ async function handleBoardUpdate(fen, senderTabId) {
   analysisTimeout = setTimeout(async function() {
     const t0 = Date.now();
     try {
+      if (fen.split(' ')[0] === START_PLACEMENT) {
+        lastTickAt = 0;
+        lastTickTurn = '';
+        opponentPaceMs = 0;
+      }
       const result = await analyzePosition(fen, { explain: 'async' });
       logAnalysis(result.fen.split(' ')[0] + ' depth ' + result.engine.depth + ' in ' +
         ((Date.now() - t0) / 1000).toFixed(1) + 's' +
@@ -1012,6 +1056,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     const evals = gameHistory.map(function(g) { return g.eval; });
     sendResponse({ ok: true, evals: evals });
     return true;
+  }
+  if (message.type === 'turn-tick') {
+    trackTurnTick(message.userColor, message.turn, message.fen);
+    return false;
   }
   if (message.type === 'check-update') {
     (async function() {

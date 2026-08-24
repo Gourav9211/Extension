@@ -89,10 +89,23 @@
   <div class="section">
     <h2>Auto-play timing</h2>
     <p style="margin:0 0 12px;color:#65716b;font-size:12px;">
-      Humanised think times for auto-played moves. Each move waits a random
-      window; occasionally it takes longer, and occasionally a quiet position
-      gets an alternative ("normal") move instead of the engine's best.
+      Humanised think times for auto-played moves. In "Match opponent" mode
+      the extension times how long the opponent thinks and replies just
+      faster, falling back to the random window until they have been timed.
+      Occasionally a quiet position gets an alternative ("normal") move
+      instead of the engine's best.
     </p>
+    <div class="row">
+      <label>Move timing</label>
+      <select id="autoTimingMode">
+        <option value="match" selected>Match opponent (1s faster)</option>
+        <option value="random">Random window</option>
+      </select>
+    </div>
+    <div class="row">
+      <label>Beat opponent by (ms)</label>
+      <input id="autoBeatByMs" type="number" min="0" max="60000" step="100" value="1000">
+    </div>
     <div class="row">
       <label>Think time min (ms)</label>
       <input id="autoDelayMinMs" type="number" min="0" max="600000" step="100" value="2500">
