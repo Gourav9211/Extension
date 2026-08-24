@@ -149,6 +149,9 @@ function waitForEngine(timeoutMs) {
 }
 
 function sfCommand(cmd) {
+  // Make search-relevant commands visible so truncation can be diagnosed
+  // from the console alone.
+  if (/^go |^setoption|^ucinewgame/.test(cmd)) logEngine('cmd: ' + cmd);
   chrome.runtime.sendMessage({ type: 'sf-cmd', cmd }).catch(function() {});
 }
 
@@ -186,7 +189,9 @@ function evaluateWithStockfish(fen, multiPv) {
         reject(new Error('Engine evaluation timeout'));
       }
     }, Math.max(18000, settings.depth * 1200));
-    sfCommand('stop');
+    // Only send 'stop' when something is actually running - a stray stop
+    // racing a fresh 'go' could truncate the new search.
+    if (pendingEval) sfCommand('stop');
     sfCommand('position fen ' + fen);
     // movetime caps the search so a position never hangs the UI; depth is
     // the usual stopping criterion on easy positions. Complex middlegames
@@ -233,6 +238,9 @@ function processEngineLine(text) {
     // Never between searches: keeping the hash warm across moves is a major
     // speed win.
     sfCommand('ucinewgame');
+    loadSettings().then(function() {
+      logEngine('search limits: depth cap ' + settings.depth + ', movetime 8000ms, multipv ' + settings.multiPv);
+    });
     for (const w of engineReadyWaiters) w.resolve();
     engineReadyWaiters = [];
     return;
@@ -475,7 +483,9 @@ async function handleBoardUpdate(fen, senderTabId) {
     const t0 = Date.now();
     try {
       const result = await analyzePosition(fen, { explain: 'async' });
-      logAnalysis(result.fen.split(' ')[0] + ' depth ' + result.engine.depth + ' in ' + ((Date.now() - t0) / 1000).toFixed(1) + 's');
+      logAnalysis(result.fen.split(' ')[0] + ' depth ' + result.engine.depth + ' in ' +
+        ((Date.now() - t0) / 1000).toFixed(1) + 's' +
+        (result.engine.tablebase ? ' (tablebase)' : ' (budget 8s, cap depth ' + settings.depth + ')'));
       sendAnalysisToPopup(result);
       const top = result.engine.moves[0];
       let uci = top.uci || top.move || '';

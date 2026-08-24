@@ -29,15 +29,22 @@ try {
   });
 
   try {
-    // Dual-net build: index 0 = big net, index 1 = small net.
+    // Dual-net build: slot 0 = big net, slot 1 = small net. Load sequentially
+    // so each load is individually visible in the service worker console.
+    const nets = [
+      { name: 'nn-1c0000000000.nnue', label: 'big', index: 0 },
+      { name: 'nn-37f18f62d772.nnue', label: 'small', index: 1 }
+    ];
     const start = Date.now();
-    const [bigNet, smallNet] = await Promise.all([
-      loadNet('nn-1c0000000000.nnue'),
-      loadNet('nn-37f18f62d772.nnue')
-    ]);
-    mod.setNnueBuffer(bigNet, 0);
-    mod.setNnueBuffer(smallNet, 1);
-    report('NNUE nets loaded (' + Math.round((Date.now() - start) / 100) / 10 + 's)');
+    for (const n of nets) {
+      const t0 = Date.now();
+      const buf = await loadNet(n.name);
+      mod.setNnueBuffer(buf, n.index);
+      const mb = Math.round((buf.length / 1048576) * 10) / 10;
+      report(n.label + ' net ACTIVE: ' + n.name + ' (' + mb + ' MB, ' +
+        ((Date.now() - t0) / 1000).toFixed(1) + 's) -> slot ' + n.index);
+    }
+    report('NNUE ready (' + ((Date.now() - start) / 1000).toFixed(1) + 's total)');
   } catch (err) {
     report('NNUE LOAD FAILED (' + (err && err.message) + ') - moves will be weak!');
   }
