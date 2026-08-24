@@ -44,7 +44,7 @@ let lastEval = null;
 // of the newer one.
 let searchesStarted = 0;
 let bestmovesSeen = 0;
-let settings = Object.assign({ depth: 22, multiPv: 3, sound: true, classify: true, autoPlay: false, geminiPrompt: '' }, AUTO_DEFAULTS);
+let settings = Object.assign({ depth: 22, multiPv: 3, sound: true, classify: true, autoPlay: false, adaptiveOpponent: true, geminiPrompt: '' }, AUTO_DEFAULTS);
 
 // Random integer in [min, max]; tolerates a swapped min/max from user input.
 function randMs(min, max) {
@@ -58,23 +58,58 @@ function randMs(min, max) {
 // following our-to-move tick is (roughly) how long the opponent thought.
 // Samples are EMA-smoothed and reset when a fresh game starts; gaps over
 // five minutes are discarded (background-tab throttling, not real thinking).
+//
+// MV3 service workers are killed after ~30s idle - exactly how long an
+// opponent can think - so this state lives in chrome.storage.session and is
+// restored on every wake-up. Without persistence the pace was always zero by
+// the time it mattered and matching silently fell back to random.
 let lastTickAt = 0;
 let lastTickTurn = '';
 let opponentPaceMs = 0;
-// When the opponent's latest move landed (arrival of our-turn tick) - the
-// anchor for deadline-based matched timing.
 let opponentMovedAtMs = 0;
+let opponentElo = 0;
 const OPPONENT_GAP_CAP_MS = 300000;
 
-function trackTurnTick(userColor, turn, fen) {
+function persistPaceState() {
+  chrome.storage.session.set({
+    paceState: {
+      lastTickAt: lastTickAt,
+      lastTickTurn: lastTickTurn,
+      opponentPaceMs: opponentPaceMs,
+      opponentMovedAtMs: opponentMovedAtMs,
+      opponentElo: opponentElo
+    }
+  }).catch(function() {});
+}
+
+(function restorePaceState() {
+  chrome.storage.session.get('paceState').then(function(data) {
+    const s = data && data.paceState;
+    if (!s) return;
+    // A stale anchor from a previous SW life would make elapsed-time math
+    // think eons have passed; keep only still-plausible values.
+    if (s.lastTickAt && Date.now() - s.lastTickAt < OPPONENT_GAP_CAP_MS) {
+      lastTickAt = s.lastTickAt;
+      lastTickTurn = s.lastTickTurn || '';
+      opponentPaceMs = s.opponentPaceMs || 0;
+      opponentMovedAtMs = s.opponentMovedAtMs || 0;
+      opponentElo = s.opponentElo || 0;
+      logAnalysis('restored pace state: ~' + (opponentPaceMs / 1000).toFixed(1) + 's, elo ' + (opponentElo || '?'));
+    }
+  }).catch(function() {});
+})();
+
+function trackTurnTick(userColor, turn, fen, oppElo) {
   // A fresh initial placement means a new game - forget the old pace.
   if ((fen || '').split(' ')[0] === START_PLACEMENT) {
     lastTickAt = 0;
     lastTickTurn = '';
     opponentPaceMs = 0;
     opponentMovedAtMs = 0;
+    persistPaceState();
     return;
   }
+  if (oppElo >= 100 && oppElo <= 3500) opponentElo = oppElo;
   const uc = userColor === 'b' ? 'b' : 'w';
   const opp = uc === 'w' ? 'b' : 'w';
   const now = Date.now();
@@ -84,11 +119,27 @@ function trackTurnTick(userColor, turn, fen) {
     const gap = lastTickAt ? now - lastTickAt : 0;
     if (lastTickTurn === opp && gap > 0 && gap <= OPPONENT_GAP_CAP_MS) {
       opponentPaceMs = opponentPaceMs ? Math.round(opponentPaceMs * 0.6 + gap * 0.4) : gap;
-      logAnalysis('opponent pace ~' + (opponentPaceMs / 1000).toFixed(1) + 's');
+      logAnalysis('opponent pace ~' + (opponentPaceMs / 1000).toFixed(1) + 's' +
+        (opponentElo ? ', elo ' + opponentElo : ''));
     }
   }
   lastTickAt = now;
   lastTickTurn = turn || '';
+  persistPaceState();
+}
+
+// Adaptive difficulty ("slightly higher level"): scale deviation frequency
+// and the quiet-position band to the opponent's rating so weaker opponents
+// face more human-looking variety and stronger ones face tighter play.
+function adaptiveParams() {
+  if (!settings.adaptiveOpponent || !opponentElo) {
+    return { oneIn: settings.autoNormalOneIn, evalCp: settings.autoNormalEvalCp, beatDeltaMs: 0 };
+  }
+  if (opponentElo < 1000) return { oneIn: 3, evalCp: 300, beatDeltaMs: 500 };
+  if (opponentElo < 1400) return { oneIn: 4, evalCp: 220, beatDeltaMs: 250 };
+  if (opponentElo < 1800) return { oneIn: 5, evalCp: 150, beatDeltaMs: 0 };
+  if (opponentElo < 2200) return { oneIn: 7, evalCp: 110, beatDeltaMs: -200 };
+  return { oneIn: 8, evalCp: 90, beatDeltaMs: -300 };
 }
 
 // Lifecycle diagnostics visible in the service worker console
@@ -173,6 +224,7 @@ async function loadSettings() {
   const stored = await chrome.storage.local.get(keys);
   if (stored.depth) settings.depth = stored.depth;
   if (stored.autoPlay != null) settings.autoPlay = !!stored.autoPlay;
+  if (stored.adaptiveOpponent != null) settings.adaptiveOpponent = !!stored.adaptiveOpponent;
   if (stored.multiPv) settings.multiPv = stored.multiPv;
   if (stored.sound != null) settings.sound = stored.sound;
   if (stored.classify != null) settings.classify = stored.classify;
@@ -416,7 +468,9 @@ function parseInfoLines(lines) {
 
 async function explainWithGemini(fen, engine) {
   const { geminiApiKey } = await chrome.storage.local.get('geminiApiKey');
-  if (!geminiApiKey) return 'Add a Gemini API key in settings for explanations.';
+  // No key, no panel noise - the popup hides the explanation section when
+  // this returns empty.
+  if (!geminiApiKey) return '';
   const topMove = engine.moves[0];
   const customPrompt = settings.geminiPrompt;
   const prompt = customPrompt
@@ -437,13 +491,13 @@ async function explainWithGemini(fen, engine) {
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
       }
     );
-    if (!response.ok) return 'Explanation unavailable.';
+    if (!response.ok) return '';
     const data = await response.json();
     return (data.candidates && data.candidates[0] && data.candidates[0].content &&
       data.candidates[0].content.parts && data.candidates[0].content.parts[0] &&
-      data.candidates[0].content.parts[0].text) || 'No explanation.';
+      data.candidates[0].content.parts[0].text) || '';
   } catch (e) {
-    return 'Explanation unavailable.';
+    return '';
   }
 }
 
@@ -490,7 +544,7 @@ async function analyzePosition(fen, opts) {
   let explanation = null;
   if (explainMode !== 'async') {
     try { explanation = await explainWithGemini(validated, engine); }
-    catch (e) { explanation = 'Explanation unavailable.'; }
+    catch (e) { explanation = ''; }
   }
 
   gameHistory.push({
@@ -814,20 +868,21 @@ function isQuietPosition(engine) {
   }
   const topCp = engine.moves[0].evaluation;
   if (topCp == null) return false;
-  return Math.abs(topCp) <= settings.autoNormalEvalCp;
+  return Math.abs(topCp) <= adaptiveParams().evalCp;
 }
 
 // Think time for every auto-played move. In 'match' mode the TOTAL wall-clock
 // time from the opponent's move to our click should be their smoothed pace
-// minus autoBeatByMs - so analysis time is subtracted, and if the engine
-// already burned past the deadline we fire almost immediately. Clamped to a
-// safe floor so we never answer instantly, capped at two minutes. Until the
-// opponent has been timed - or in 'random' mode - a random baseline window is
-// used, with one move in autoSlowOneIn crossing the slow band instead (0
-// disables the slow band).
+// minus autoBeatByMs (adjusted adaptively by rating) - so analysis time is
+// subtracted, and if the engine already burned past the deadline we fire
+// almost immediately. Clamped to a safe floor so we never answer instantly,
+// capped at two minutes. Until the opponent has been timed - or in 'random'
+// mode - a random baseline window is used, with one move in autoSlowOneIn
+// crossing the slow band instead (0 disables the slow band).
 function autoPlayDelay() {
   if (settings.autoTimingMode === 'match' && opponentPaceMs > 0 && opponentMovedAtMs > 0) {
-    const target = Math.max(700, Math.min(120000, opponentPaceMs - (settings.autoBeatByMs || 0)));
+    const beat = (settings.autoBeatByMs || 0) + adaptiveParams().beatDeltaMs;
+    const target = Math.max(700, Math.min(120000, opponentPaceMs - beat));
     const elapsed = Date.now() - opponentMovedAtMs;
     return Math.max(200, target - elapsed);
   }
@@ -844,8 +899,8 @@ function autoPlayDelay() {
 function decideAutoPlayDeviation(result, bestUci) {
   const engine = result.engine;
   if (!isQuietPosition(engine)) return null;
-  const normalOneIn = settings.autoNormalOneIn;
-  if (normalOneIn < 1 || Math.floor(Math.random() * normalOneIn) !== 0) return null;
+  const params = adaptiveParams();
+  if (params.oneIn < 1 || Math.floor(Math.random() * params.oneIn) !== 0) return null;
   const legal = new Set(legalMovesFromFen(result.fen));
   if (legal.size < 2) return null;
   const bestKey = bestUci.substring(0, 4);
@@ -861,7 +916,8 @@ function decideAutoPlayDeviation(result, bestUci) {
   }
   if (!alternatives.length) return null;
   const uci = alternatives[Math.floor(Math.random() * alternatives.length)];
-  logAnalysis('auto-play normal move ' + uci + ' (engine said ' + bestKey + ')');
+  logAnalysis('auto-play normal move ' + uci + ' (engine said ' + bestKey + ')' +
+    (opponentElo ? ' vs elo ' + opponentElo : ''));
   return { uci: uci };
 }
 
@@ -891,15 +947,24 @@ async function handleBoardUpdate(fen, senderTabId) {
       // best) move. The deviation applies in BOTH timing modes; the popup
       // keeps showing the engine's real best line.
       let playDelayMs = 0;
+      let playedRankLabel = 'BEST';
       if (settings.autoPlay && /^[a-h][1-8][a-h][1-8]/.test(uci)) {
         playDelayMs = autoPlayDelay();
         const deviation = decideAutoPlayDeviation(result, uci);
         if (deviation) {
+          // Find the deviated move's true rank so the board shows an honest
+          // badge for what is actually about to be played.
+          const playedKey = deviation.uci.substring(0, 4);
+          for (let i = 1; i < result.engine.moves.length && i < 3; i++) {
+            let u = result.engine.moves[i].uci || result.engine.moves[i].move || '';
+            if (u.substring(0, 4) === playedKey) { playedRankLabel = ['BEST', '2ND', '3RD'][i]; break; }
+          }
           uci = deviation.uci;
         }
         logAnalysis('auto-play in ' + (playDelayMs / 1000).toFixed(1) + 's' +
           ' (' + settings.autoTimingMode + ' mode, pace ~' +
-          (opponentPaceMs / 1000).toFixed(1) + 's)');
+          (opponentPaceMs / 1000).toFixed(1) + 's, elo ' +
+          (opponentElo || '?') + ', playing ' + playedRankLabel + ')');
       }
       if (/^[a-h][1-8][a-h][1-8]/.test(uci)) {
         // Ranked arrows: best (orange) plus 2nd/3rd choices in their own
@@ -928,7 +993,11 @@ async function handleBoardUpdate(fen, senderTabId) {
           });
         }
         if (!arrows.some(a => a.from + a.to === uci.substring(0, 4))) {
-          arrows.unshift({ from: uci.substring(0, 2), to: uci.substring(2, 4), color: '#ff6b35', label: 'BEST' });
+          arrows.unshift({
+            from: uci.substring(0, 2), to: uci.substring(2, 4),
+            color: playedRankLabel === 'BEST' ? '#ff6b35' : '#9b59b6',
+            label: playedRankLabel
+          });
         }
         const sendArrow = function(tabId) {
           if (!tabId) return;
@@ -1077,7 +1146,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message.type === 'turn-tick') {
-    trackTurnTick(message.userColor, message.turn, message.fen);
+    trackTurnTick(message.userColor, message.turn, message.fen, message.oppElo);
     return false;
   }
   if (message.type === 'check-update') {

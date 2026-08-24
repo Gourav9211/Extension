@@ -5,6 +5,12 @@ const noGame = document.querySelector('#no-game');
 const moveEl = document.querySelector('#move');
 const engineEl = document.querySelector('#engine');
 const explanationEl = document.querySelector('#explanation');
+const explanationSection = document.querySelector('#explanation-section');
+
+function setExplanation(text) {
+  explanationEl.textContent = text || '';
+  explanationSection.hidden = !text;
+}
 const altMovesEl = document.querySelector('#alt-moves');
 const evalContainer = document.querySelector('#eval-container');
 const evalFill = document.querySelector('#eval-fill');
@@ -259,7 +265,7 @@ function renderAnalysis(analysis) {
       topMove.mate != null ? 'M' + topMove.mate : '?';
   }
   engineEl.textContent = 'Depth ' + depth + ' \u00b7 Eval ' + eval_ + (analysis.tablebase ? ' (tablebase)' : '');
-  explanationEl.textContent = analysis.explanation;
+  setExplanation(analysis.explanation);
 
   if (analysis.opening) {
     openingBanner.hidden = false;
@@ -296,7 +302,7 @@ chrome.runtime.onMessage.addListener((message) => {
     }
   }
   if (message.type === 'analysis-explanation') {
-    explanationEl.textContent = message.explanation || '';
+    setExplanation(message.explanation);
   }
   if (message.type === 'monitoring-toggled') {
     if (message.monitoring) {

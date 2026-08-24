@@ -79,6 +79,16 @@
       <label>Auto-play recommended move</label>
       <label class="toggle"><input type="checkbox" id="autoPlay"><span class="slider"></span></label>
     </div>
+    <div class="row">
+      <label>Adapt to opponent rating</label>
+      <label class="toggle"><input type="checkbox" id="adaptiveOpponent" checked><span class="slider"></span></label>
+    </div>
+    <p style="margin:4px 0 0;color:#65716b;font-size:12px;">
+      Reads the opponent's chess.com rating and adjusts automatically: vs
+      lower-rated players it deviates to 2nd/3rd-best moves more often and
+      replies a touch faster; vs higher-rated ones it plays the engine's best
+      more often and matches their pace more closely.
+    </p>
     <p style="margin:4px 0 0;color:#a05a2c;font-size:12px;">
       Clicks the suggested move on the board automatically. Engine assistance
       and automation violate chess.com fair-play rules and can get your account

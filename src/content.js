@@ -288,10 +288,17 @@ function sendFenUpdate() {
       }
       // Pace telemetry: one tick per newly seen side-to-move, for both
       // turns. The service worker times the gap between an opponent-to-move
-      // tick and our-to-move tick to learn how fast the opponent plays.
+      // tick and our-to-move tick to learn how fast the opponent plays, and
+      // carries the opponent's board rating for adaptive strength.
       if (stm && position.fen !== lastTickFen) {
         lastTickFen = position.fen;
-        trySend({ type: 'turn-tick', userColor: userColor, turn: stm, fen: position.fen });
+        trySend({
+          type: 'turn-tick',
+          userColor: userColor,
+          turn: stm,
+          fen: position.fen,
+          oppElo: detectOpponentElo(board)
+        });
       }
     }
 
@@ -422,6 +429,37 @@ function trySend(msg) {
     if (p && p.catch) p.catch(function(e) { if (contextDead(e)) markExtensionDead(); });
   } catch (e) {
     if (contextDead(e)) markExtensionDead();
+  }
+}
+
+// Reads the opponent's rating off the page. Chess.com renders player
+// components above/below the board; the opponent is on the side opposite to
+// the user's pieces (top when the user plays white, bottom when flipped).
+// Ratings live in elements whose class mentions "rating"; fall back to a
+// "(1234)" text pattern near the board.
+function detectOpponentElo(board) {
+  try {
+    const geo = boardGeometry(board);
+    if (!geo || !(geo.sq > 0)) return 0;
+    const scope = board.closest('main') || document;
+    const candidates = scope.querySelectorAll('[class*="rating" i]');
+    let best = 0;
+    for (const el of candidates) {
+      const r = el.getBoundingClientRect();
+      if (!r.width && !r.height) continue;
+      const centerY = r.top + r.height / 2;
+      const boardBottom = geo.top + geo.sq * 8;
+      const isOppSide = geo.flipped ? centerY > boardBottom : centerY < geo.top;
+      if (!isOppSide) continue;
+      const m = (el.textContent || '').match(/(\d{3,4})/);
+      if (m) {
+        const v = parseInt(m[1], 10);
+        if (v >= 100 && v <= 3500 && !best) best = v;
+      }
+    }
+    return best;
+  } catch (e) {
+    return 0;
   }
 }
 

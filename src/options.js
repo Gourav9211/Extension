@@ -2,6 +2,7 @@ const $ = (sel) => document.querySelector(sel);
 const DEFAULTS = {
   depth: 22,
   autoPlay: false,
+  adaptiveOpponent: true,
   multiPv: 3,
   sound: true,
   darkMode: false,
