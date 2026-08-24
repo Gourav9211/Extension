@@ -51,6 +51,9 @@ button.secondary { background: transparent; border: 1px solid #a8b4a2; color: #2
 #classify-icon { font-size: 18px; font-weight: 800; }
 #classify-text { font-weight: 700; }
 
+.update-banner { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-radius: 6px; margin-bottom: 14px; font: 600 13px ui-sans-serif, system-ui, sans-serif; background: #f3e3bd; color: #7a5c1e; }
+.update-banner button.secondary { font-size: 12px; padding: 4px 10px; white-space: nowrap; }
+
 .graph-section { margin-bottom: 14px; border-radius: 6px; overflow: hidden; }
 #eval-graph { width: 100%; display: block; border-radius: 6px; }
 
@@ -87,6 +90,7 @@ body.dark .eval-bar { background: #111; }
 body.dark .eval-fill { background: #263d32; }
 body.dark .opening-banner { background: #2a2e2c; color: #aaa; }
 body.dark .classification-banner { background: rgba(255,255,255,0.05); }
+body.dark .update-banner { background: #3a3323; color: #d8b96a; }
 body.dark .accuracy-badge { background: #2a2e2c; color: #aaa; }
 body.dark .move-history { background: #1a1e1c; border-color: #333; }
 body.dark .history-entry { color: #ccc; border-bottom-color: #333; }

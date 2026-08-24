@@ -2,6 +2,11 @@ const GEMINI_MODEL = 'gemini-2.0-flash';
 const TABLEBASE_URL = 'https://tablebase.lichess.ovh/standard';
 const CACHE_TTL = 60000;
 const MAX_CACHE_SIZE = 50;
+// Release checks: on every start (and at most once per hour afterwards) the
+// extension compares its manifest version against the latest GitHub release,
+// so the popup can offer the update button.
+const UPDATE_REPO = 'Gourav9211/Extension';
+const UPDATE_CHECK_INTERVAL_MS = 3600000;
 // Auto-play humaniser: every auto-played move first waits a random 2.5-4s,
 // and one move in three crosses 5s (up to just under 10s), so delivery never
 // looks instant. On top of that, roughly one move in five, when the position
@@ -121,6 +126,41 @@ async function loadSettings() {
 
 function detectOpening(fen) {
   return OPENINGS[fen.split(' ')[0]] || null;
+}
+
+// Numeric semver-style comparison: 1 if a newer than b, -1 older, 0 equal.
+function compareVersions(a, b) {
+  const pa = String(a).split('.');
+  const pb = String(b).split('.');
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = parseInt(pa[i], 10) || 0;
+    const nb = parseInt(pb[i], 10) || 0;
+    if (na !== nb) return na > nb ? 1 : -1;
+  }
+  return 0;
+}
+
+// Fetches the latest GitHub release and stores its version + URL. Cached for
+// UPDATE_CHECK_INTERVAL_MS unless forced (the popup's "Check now" forces).
+async function checkForUpdate(force) {
+  const data = await chrome.storage.local.get('updateCheck');
+  const cached = data.updateCheck || null;
+  if (!force && cached && cached.lastChecked &&
+      Date.now() - cached.lastChecked < UPDATE_CHECK_INTERVAL_MS) {
+    return cached;
+  }
+  const resp = await fetch('https://api.github.com/repos/' + UPDATE_REPO + '/releases/latest');
+  if (!resp.ok) throw new Error('GitHub API HTTP ' + resp.status);
+  const release = await resp.json();
+  const latestVersion = String(release.tag_name || '').replace(/^v/i, '');
+  const status = {
+    lastChecked: Date.now(),
+    latestVersion: latestVersion,
+    releaseUrl: release.html_url || ('https://github.com/' + UPDATE_REPO + '/releases/latest'),
+    updateAvailable: compareVersions(latestVersion, chrome.runtime.getManifest().version) > 0
+  };
+  await chrome.storage.local.set({ updateCheck: status });
+  return status;
 }
 
 async function ensureOffscreen() {
@@ -912,6 +952,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true, evals: evals });
     return true;
   }
+  if (message.type === 'check-update') {
+    (async function() {
+      try { sendResponse({ ok: true, update: await checkForUpdate(!!message.force) }); }
+      catch (error) { sendResponse({ ok: false, error: error.message }); }
+    })();
+    return true;
+  }
   return undefined;
 });
 
@@ -951,3 +998,6 @@ ensureOffscreen().catch(function(e) {
   console.error('Chess Analyst: offscreen setup failed:', e.message);
 });
 loadSettings();
+checkForUpdate(false).catch(function(e) {
+  logEngine('update check failed: ' + e.message);
+});

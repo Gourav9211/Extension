@@ -20,6 +20,9 @@ const accuracyBadge = document.querySelector('#accuracy-badge');
 const classifyBanner = document.querySelector('#classification-banner');
 const classifyIcon = document.querySelector('#classify-icon');
 const classifyText = document.querySelector('#classify-text');
+const updateBanner = document.querySelector('#update-banner');
+const updateText = document.querySelector('#update-text');
+const updateLink = document.querySelector('#update-link');
 
 let audioCtx = null;
 let evalHistory = [];
@@ -285,6 +288,17 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
+async function refreshUpdateStatus() {
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'check-update' });
+    if (!resp || !resp.ok || !resp.update || !resp.update.updateAvailable) return;
+    updateBanner.hidden = false;
+    updateText.textContent = 'Version ' + resp.update.latestVersion + ' is available';
+    const url = resp.update.releaseUrl;
+    updateLink.addEventListener('click', () => chrome.tabs.create({ url: url }));
+  } catch (e) {}
+}
+
 async function init() {
   await loadSettings();
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -340,3 +354,4 @@ chrome.storage.local.get('darkMode', (data) => {
 });
 
 init();
+refreshUpdateStatus();

@@ -10,6 +10,7 @@ A Chrome Manifest V3 extension that analyzes Chess.com positions in real time us
 - Best-move arrow drawn on the board + move classifications (!!, ?, ??)
 - Win-probability graph and move history with accuracy estimate in the popup
 - PGN export and game archive (options page)
+- Update checker against the repo's GitHub releases with an in-popup banner
 - FEN analyzer, dark mode, board coordinates overlay
 - Toggle live analysis with `Cmd+Shift+A` (`Ctrl+Shift+A` on Windows/Linux)
 
