@@ -23,6 +23,9 @@ const classifyText = document.querySelector('#classify-text');
 const updateBanner = document.querySelector('#update-banner');
 const updateText = document.querySelector('#update-text');
 const updateLink = document.querySelector('#update-link');
+const versionText = document.querySelector('#version-text');
+const updateStatusText = document.querySelector('#update-status-text');
+const checkUpdateBtn = document.querySelector('#check-update');
 
 let audioCtx = null;
 let evalHistory = [];
@@ -309,15 +312,37 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-async function refreshUpdateStatus() {
-  try {
-    const resp = await chrome.runtime.sendMessage({ type: 'check-update' });
-    if (!resp || !resp.ok || !resp.update || !resp.update.updateAvailable) return;
+function applyUpdateStatus(status) {
+  if (status && status.updateAvailable && status.releaseUrl) {
     updateBanner.hidden = false;
-    updateText.textContent = 'Version ' + resp.update.latestVersion + ' is available';
-    const url = resp.update.releaseUrl;
-    updateLink.addEventListener('click', () => chrome.tabs.create({ url: url }));
-  } catch (e) {}
+    updateText.textContent = 'Version ' + status.latestVersion + ' available';
+    updateLink.href = status.releaseUrl;
+  } else {
+    updateBanner.hidden = true;
+    updateLink.removeAttribute('href');
+  }
+}
+
+async function refreshUpdateStatus(force) {
+  const originalLabel = checkUpdateBtn.textContent;
+  checkUpdateBtn.disabled = true;
+  checkUpdateBtn.textContent = 'Checking...';
+  updateStatusText.textContent = '';
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'check-update', force: !!force });
+    if (!resp || !resp.ok) throw new Error((resp && resp.error) || 'no response');
+    applyUpdateStatus(resp.update);
+    if (resp.update && !resp.update.updateAvailable) {
+      updateStatusText.textContent = 'Up to date';
+    }
+  } catch (e) {
+    updateStatusText.textContent = 'Update check failed';
+    updateStatusText.title = e.message || String(e);
+    applyUpdateStatus(null);
+  } finally {
+    checkUpdateBtn.disabled = false;
+    checkUpdateBtn.textContent = originalLabel;
+  }
 }
 
 async function init() {
@@ -364,6 +389,8 @@ document.querySelector('#save-game').addEventListener('click', async () => {
 
 document.querySelector('#settings').addEventListener('click', () => chrome.runtime.openOptionsPage());
 
+checkUpdateBtn.addEventListener('click', () => refreshUpdateStatus(true));
+
 darkToggle.addEventListener('click', async () => {
   document.body.classList.toggle('dark');
   const isDark = document.body.classList.contains('dark');
@@ -375,4 +402,5 @@ chrome.storage.local.get('darkMode', (data) => {
 });
 
 init();
-refreshUpdateStatus();
+versionText.textContent = 'v' + chrome.runtime.getManifest().version;
+refreshUpdateStatus(false);

@@ -162,6 +162,8 @@ function compareVersions(a, b) {
 
 // Fetches the latest GitHub release and stores its version + URL. Cached for
 // UPDATE_CHECK_INTERVAL_MS unless forced (the popup's "Check now" forces).
+// When GitHub is unreachable or rate-limited, falls back to the last cached
+// result instead of failing outright.
 async function checkForUpdate(force) {
   const data = await chrome.storage.local.get('updateCheck');
   const cached = data.updateCheck || null;
@@ -169,18 +171,25 @@ async function checkForUpdate(force) {
       Date.now() - cached.lastChecked < UPDATE_CHECK_INTERVAL_MS) {
     return cached;
   }
-  const resp = await fetch('https://api.github.com/repos/' + UPDATE_REPO + '/releases/latest');
-  if (!resp.ok) throw new Error('GitHub API HTTP ' + resp.status);
-  const release = await resp.json();
-  const latestVersion = String(release.tag_name || '').replace(/^v/i, '');
-  const status = {
-    lastChecked: Date.now(),
-    latestVersion: latestVersion,
-    releaseUrl: release.html_url || ('https://github.com/' + UPDATE_REPO + '/releases/latest'),
-    updateAvailable: compareVersions(latestVersion, chrome.runtime.getManifest().version) > 0
-  };
-  await chrome.storage.local.set({ updateCheck: status });
-  return status;
+  try {
+    const resp = await fetch('https://api.github.com/repos/' + UPDATE_REPO + '/releases/latest');
+    if (!resp.ok) throw new Error('GitHub API HTTP ' + resp.status);
+    const release = await resp.json();
+    const latestVersion = String(release.tag_name || '').replace(/^v/i, '');
+    const status = {
+      lastChecked: Date.now(),
+      latestVersion: latestVersion,
+      releaseUrl: release.html_url || ('https://github.com/' + UPDATE_REPO + '/releases/latest'),
+      updateAvailable: compareVersions(latestVersion, chrome.runtime.getManifest().version) > 0
+    };
+    await chrome.storage.local.set({ updateCheck: status });
+    return status;
+  } catch (e) {
+    if (cached && cached.lastChecked) {
+      return Object.assign({}, cached, { stale: true });
+    }
+    throw e;
+  }
 }
 
 async function ensureOffscreen() {
