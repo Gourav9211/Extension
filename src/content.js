@@ -1,4 +1,5 @@
 let lastFen = '';
+let lastWarmFen = '';
 let observer = null;
 let observedBoard = null;
 let coordsOverlay = null;
@@ -272,6 +273,12 @@ function sendFenUpdate() {
       if (!stm && lastMoveBy) stm = lastMoveBy === 'w' ? 'b' : 'w';
       if (!stm && parts[0] === START_PLACEMENT) stm = 'w';
       if (!stm || stm !== userColor) {
+        // Opponent's turn: keep the engine's transposition table warm with a
+        // shallow background search so the next user-side analysis is fast.
+        if (stm && position.fen !== lastWarmFen) {
+          lastWarmFen = position.fen;
+          chrome.runtime.sendMessage({ type: 'warm-position', fen: position.fen }).catch(function() {});
+        }
         clearArrow();
         return;
       }

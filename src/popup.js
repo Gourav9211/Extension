@@ -268,6 +268,9 @@ chrome.runtime.onMessage.addListener((message) => {
       setStatus(message.error || 'Analysis failed');
     }
   }
+  if (message.type === 'analysis-explanation') {
+    explanationEl.textContent = message.explanation || '';
+  }
   if (message.type === 'monitoring-toggled') {
     if (message.monitoring) {
       setStatus('Monitoring active', true);

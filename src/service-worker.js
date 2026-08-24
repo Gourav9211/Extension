@@ -16,7 +16,7 @@ let lastEval = null;
 // of the newer one.
 let searchesStarted = 0;
 let bestmovesSeen = 0;
-let settings = { depth: 30, multiPv: 3, sound: true, debounceMs: 500, classify: true, autoPlay: false, geminiPrompt: '' };
+let settings = { depth: 22, multiPv: 3, sound: true, debounceMs: 500, classify: true, autoPlay: false, geminiPrompt: '' };
 
 const OPENINGS = {
   'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR': "King's Pawn",
@@ -180,13 +180,29 @@ function evaluateWithStockfish(fen, multiPv) {
         pendingEval = null;
         reject(new Error('Engine evaluation timeout'));
       }
-    }, Math.max(30000, settings.depth * 3000));
+    }, Math.max(18000, settings.depth * 1200));
     sfCommand('stop');
-    sfCommand('ucinewgame');
     sfCommand('position fen ' + fen);
-    sfCommand('go depth ' + settings.depth + ' movetime 15000 multipv ' + multiPv);
+    // movetime caps the search so a position never hangs the UI; depth is
+    // the usual stopping criterion on easy positions.
+    sfCommand('go depth ' + settings.depth + ' movetime 5000 multipv ' + multiPv);
     searchesStarted += 1;
   });
+}
+
+// Transposition-table warming ("pondering"): while the opponent thinks, run
+// a shallow search of their position so the shared hash is primed when the
+// user's move arrives. Never displayed and never cached - purely speed.
+function warmEngine(fen) {
+  if (!engineReady || pendingEval) return;
+  const info = { lines: [], warm: true, resolve: function() {}, reject: function() {}, timeout: null };
+  pendingEval = info;
+  info.timeout = setTimeout(function() {
+    if (pendingEval === info) pendingEval = null;
+  }, 6000);
+  sfCommand('position fen ' + fen);
+  sfCommand('go depth 10 movetime 1200');
+  searchesStarted += 1;
 }
 
 function processEngineLine(text) {
@@ -194,6 +210,9 @@ function processEngineLine(text) {
     engineReady = true;
     searchesStarted = 0;
     bestmovesSeen = 0;
+    // Reset transposition tables exactly once per engine boot. Never between
+    // searches: keeping the hash warm across moves is a major speed win.
+    sfCommand('ucinewgame');
     for (const w of engineReadyWaiters) w.resolve();
     engineReadyWaiters = [];
     return;
@@ -275,9 +294,10 @@ async function explainWithGemini(fen, engine) {
   }
 }
 
-async function analyzePosition(fen) {
+async function analyzePosition(fen, opts) {
+  const explainMode = (opts && opts.explain) || 'await';
   await loadSettings();
-  await waitForEngine();
+  await waitForEngine(30000);
   const validated = validateFen(fen);
   const pieceCount = countPieces(validated);
 
@@ -311,9 +331,14 @@ async function analyzePosition(fen) {
   const currCp = engine.moves[0].evaluation;
   if (currCp != null) lastEval = currCp;
 
+  // In 'async' mode the caller wants the engine result immediately and will
+  // fetch the Gemini explanation separately - the arrow must not wait on a
+  // network round-trip.
   let explanation = null;
-  try { explanation = await explainWithGemini(validated, engine); }
-  catch (e) { explanation = 'Explanation unavailable.'; }
+  if (explainMode !== 'async') {
+    try { explanation = await explainWithGemini(validated, engine); }
+    catch (e) { explanation = 'Explanation unavailable.'; }
+  }
 
   gameHistory.push({
     fen: validated, bestMove: engine.moves[0].move, eval: currCp,
@@ -322,7 +347,7 @@ async function analyzePosition(fen) {
   if (gameHistory.length > 200) gameHistory = gameHistory.slice(-200);
 
   return {
-    ok: true, engine: engine, explanation: explanation, opening: opening,
+    ok: true, fen: validated, engine: engine, explanation: explanation, opening: opening,
     classification: classification, classifyLabel: classifyLabel(classification),
     tablebase: !!engine.tablebase, category: engine.category || null
   };
@@ -428,7 +453,7 @@ async function handleBoardUpdate(fen, senderTabId) {
   if (analysisTimeout) clearTimeout(analysisTimeout);
   analysisTimeout = setTimeout(async function() {
     try {
-      const result = await analyzePosition(fen);
+      const result = await analyzePosition(fen, { explain: 'async' });
       sendAnalysisToPopup(result);
       const top = result.engine.moves[0];
       let uci = top.uci || top.move || '';
@@ -453,6 +478,11 @@ async function handleBoardUpdate(fen, senderTabId) {
           });
         }
       }
+      // Explanation trails the engine result so the network never delays
+      // arrows or the popup.
+      explainWithGemini(result.fen, result.engine).then(function(explanation) {
+        chrome.runtime.sendMessage({ type: 'analysis-explanation', fen: result.fen, explanation: explanation }).catch(function() {});
+      }).catch(function() {});
     } catch (error) {
       if (/Superseded/i.test(error.message || '')) return;
       sendAnalysisToPopup({ ok: false, error: error.message });
@@ -509,6 +539,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message.type === 'sf-engine-loaded') {
     if (!engineReady) sfCommand('uci');
+    return false;
+  }
+  if (message.type === 'warm-position') {
+    try { validateFen(message.fen); } catch (e) { return false; }
+    warmEngine(message.fen);
     return false;
   }
   if (message.type === 'analyze-position') {

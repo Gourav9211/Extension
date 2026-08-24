@@ -1,16 +1,63 @@
+// Engine loading with automatic failover. Preference order:
+//   1. lila-stockfish-web Stockfish 17.1 (lichess build, ES-module worker,
+//      may use shared-memory threads - needs a bridge worker)
+//   2. Stockfish 16 NNUE single-threaded WASM
+//   3. legacy asm build
+// If a build fails to reach uciok within 12s it is terminated and the next
+// candidate starts, so analysis keeps working no matter what.
+const ENGINE_CANDIDATES = [
+  { url: 'engine/lsf-sf171-bridge.js', type: 'module' },
+  { url: 'engine/stockfish-nnue-16-single.js' },
+  { url: 'engine/stockfish.js' }
+];
+
 let engine = null;
+let candidateIndex = 0;
+let gotUciOk = false;
+let readyTimer = null;
+
+function report(text) {
+  chrome.runtime.sendMessage({ type: 'sf-line', text: text }).catch(function() {});
+}
+
+function failover() {
+  clearTimeout(readyTimer);
+  readyTimer = null;
+  try { if (engine) engine.terminate(); } catch (e) {}
+  engine = null;
+  if (candidateIndex < ENGINE_CANDIDATES.length - 1) {
+    candidateIndex += 1;
+    report('info string engine build failed, falling back to ' + ENGINE_CANDIDATES[candidateIndex].url);
+    startEngine();
+  } else {
+    report('info string all engine builds failed to load');
+  }
+}
 
 function startEngine() {
   if (engine) return;
-  engine = new Worker(chrome.runtime.getURL('engine/stockfish.js'));
+  const candidate = ENGINE_CANDIDATES[candidateIndex];
+  const url = chrome.runtime.getURL(candidate.url);
+  engine = new Worker(url, candidate.type ? { type: candidate.type } : undefined);
+  gotUciOk = false;
   engine.onmessage = function(e) {
     const text = typeof e.data === 'string' ? e.data : (e.data && e.data.line);
     if (typeof text !== 'string') return;
-    chrome.runtime.sendMessage({ type: 'sf-line', text: text }).catch(function() {});
+    if (!gotUciOk && text.indexOf('uciok') === 0) {
+      gotUciOk = true;
+      clearTimeout(readyTimer);
+      readyTimer = null;
+    }
+    report(text);
   };
   engine.onerror = function(e) {
-    chrome.runtime.sendMessage({ type: 'sf-line', text: 'info string worker error: ' + (e.message || 'load failed') }).catch(function() {});
+    if (!gotUciOk) failover();
+    else report('info string worker error: ' + (e.message || 'runtime error'));
   };
+  readyTimer = setTimeout(function() {
+    if (!gotUciOk) failover();
+  }, 12000);
+  report('info string starting engine: ' + candidate.url);
   chrome.runtime.sendMessage({ type: 'sf-engine-loaded' }).catch(function() {});
 }
 
