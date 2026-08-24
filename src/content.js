@@ -366,6 +366,16 @@ function pressAt(x, y) {
 
 let playBusy = false;
 
+// The service worker can schedule a move seconds ahead (randomised think
+// time); any newer instruction or teardown must supersede a pending one.
+let pendingPlayTimer = null;
+function cancelPendingPlay() {
+  if (pendingPlayTimer) {
+    clearTimeout(pendingPlayTimer);
+    pendingPlayTimer = null;
+  }
+}
+
 function currentPlacement() {
   try { return capturePosition().fen.split(' ')[0]; } catch (e) { return null; }
 }
@@ -393,8 +403,7 @@ let extensionDead = false;
 function markExtensionDead() {
   if (extensionDead) return true;
   extensionDead = true;
-  stopObserving();
-  clearArrow();
+  stopMonitoringAndReset();
   console.warn('Chess extension: extension was reloaded - refresh this page to reconnect.');
   return true;
 }
@@ -636,6 +645,12 @@ function startObserving() {
   console.log('Chess extension: monitoring board changes');
 }
 
+function stopMonitoringAndReset() {
+  cancelPendingPlay();
+  stopObserving();
+  clearArrow();
+}
+
 function stopObserving() {
   if (observer) {
     observer.disconnect();
@@ -686,14 +701,25 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === 'draw-arrow') {
     drawArrow(message.from, message.to, message.color);
-    if (message.play && !extensionDead && isUsersTurnNow()) playMove(message.from, message.to);
+    if (message.play && !extensionDead && isUsersTurnNow()) {
+      cancelPendingPlay();
+      const delayMs = Number.isFinite(message.playDelayMs) ? Math.max(0, message.playDelayMs) : 0;
+      if (delayMs > 0) {
+        console.warn('Chess extension: auto-play of ' + message.from + message.to + ' scheduled in ' + (delayMs / 1000).toFixed(1) + 's');
+      }
+      pendingPlayTimer = setTimeout(function() {
+        pendingPlayTimer = null;
+        playMove(message.from, message.to);
+      }, delayMs);
+    } else {
+      cancelPendingPlay();
+    }
     sendResponse({ ok: true });
     return true;
   }
 
   if (message.type === 'stop-monitoring') {
-    stopObserving();
-    clearArrow();
+    stopMonitoringAndReset();
     sendResponse({ ok: true });
     return true;
   }

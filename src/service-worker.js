@@ -2,6 +2,15 @@ const GEMINI_MODEL = 'gemini-2.0-flash';
 const TABLEBASE_URL = 'https://tablebase.lichess.ovh/standard';
 const CACHE_TTL = 60000;
 const MAX_CACHE_SIZE = 50;
+// Auto-play humaniser: roughly one move in five, when the position is quiet
+// (no mate in sight, evaluation within +-1.5 pawns, no tablebase verdict),
+// the engine's top choice is swapped for one of its alternative lines - a
+// plausible "normal" move - delivered after a random think time always kept
+// below ten seconds. Critical positions always get the engine's best.
+const AUTO_NORMAL_ONE_IN = 5;
+const AUTO_NORMAL_MAX_EVAL_CP = 150;
+const AUTO_DELAY_MIN_MS = 2000;
+const AUTO_DELAY_MAX_MS = 10000;
 
 let analysisTimeout = null;
 let positionCache = new Map();
@@ -477,6 +486,252 @@ async function debuggerPlay(tabId, from, to, fallbackPoints) {
   }
 }
 
+// ---- BEGIN LEGAL MOVE GENERATION ----
+// Pure chess logic used only by the auto-play randomiser to enumerate every
+// legal move in the current position. No chrome.* dependencies so it can be
+// unit-tested standalone (perft-checked against known node counts).
+
+const SLIDER_RAYS = {
+  r: [[-1, 0], [1, 0], [0, -1], [0, 1]],
+  b: [[-1, -1], [-1, 1], [1, -1], [1, 1]],
+  q: [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [-1, 1], [1, -1], [1, 1]]
+};
+const LEAP_DELTAS = {
+  n: [[-2, -1], [-2, 1], [-1, -2], [-1, 2], [1, -2], [1, 2], [2, -1], [2, 1]],
+  k: [[-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]]
+};
+
+function parseGrid(fen) {
+  const fields = fen.split(' ');
+  const grid = fields[0].split('/').map(function(row) {
+    const cells = [];
+    for (const ch of row) {
+      if (ch >= '1' && ch <= '8') {
+        for (let i = 0; i < parseInt(ch, 10); i++) cells.push(null);
+      } else {
+        cells.push(ch);
+      }
+    }
+    return cells;
+  });
+  return {
+    grid: grid,
+    turn: fields[1],
+    castling: fields[2] || '-',
+    ep: fields[3] && fields[3] !== '-' ? fields[3] : null
+  };
+}
+
+function squareName(r, f) { return String.fromCharCode(97 + f) + String(8 - r); }
+function pieceSide(p) { return p === p.toUpperCase() ? 'w' : 'b'; }
+function onBoard(r, f) { return r >= 0 && r < 8 && f >= 0 && f < 8; }
+
+function isAttacked(grid, r, f, by) {
+  // Pawns attack one rank "forward" from their own side.
+  const pr = by === 'w' ? r + 1 : r - 1;
+  for (const df of [-1, 1]) {
+    if (onBoard(pr, f + df)) {
+      const p = grid[pr][f + df];
+      if (p && pieceSide(p) === by && p.toLowerCase() === 'p') return true;
+    }
+  }
+  for (const kind of ['n', 'k']) {
+    for (const d of LEAP_DELTAS[kind]) {
+      const rr = r + d[0], ff = f + d[1];
+      if (!onBoard(rr, ff)) continue;
+      const p = grid[rr][ff];
+      if (p && pieceSide(p) === by && p.toLowerCase() === kind) return true;
+    }
+  }
+  const raySets = [
+    { dirs: SLIDER_RAYS.r, hit: 'r' },
+    { dirs: SLIDER_RAYS.b, hit: 'b' }
+  ];
+  for (const set of raySets) {
+    for (const d of set.dirs) {
+      let rr = r + d[0], ff = f + d[1];
+      while (onBoard(rr, ff)) {
+        const p = grid[rr][ff];
+        if (p) {
+          if (pieceSide(p) === by) {
+            const t = p.toLowerCase();
+            if (t === set.hit || t === 'q') return true;
+          }
+          break;
+        }
+        rr += d[0]; ff += d[1];
+      }
+    }
+  }
+  return false;
+}
+
+function findKing(grid, side) {
+  const target = side === 'w' ? 'K' : 'k';
+  for (let r = 0; r < 8; r++) {
+    for (let f = 0; f < 8; f++) {
+      if (grid[r][f] === target) return [r, f];
+    }
+  }
+  return null;
+}
+
+// Returns UCI strings ('e2e4', promotions as '...q'). Empty array on any
+// parse problem - callers must treat that as "no randomisation possible".
+function legalMovesFromFen(fen) {
+  try {
+    const pos = parseGrid(fen);
+    const grid = pos.grid;
+    const me = pos.turn;
+    const opp = me === 'w' ? 'b' : 'w';
+    const moves = [];
+    const add = function(fr, ff, tr, tf, extra) {
+      const m = Object.assign({ fr: fr, ff: ff, tr: tr, tf: tf, ep: false, castle: false, promo: null }, extra);
+      moves.push(m);
+    };
+
+    for (let r = 0; r < 8; r++) {
+      for (let f = 0; f < 8; f++) {
+        const p = grid[r][f];
+        if (!p || pieceSide(p) !== me) continue;
+        const t = p.toLowerCase();
+        if (t === 'p') {
+          const dir = me === 'w' ? -1 : 1;
+          const startRank = me === 'w' ? 6 : 1;
+          const promoRank = me === 'w' ? 0 : 7;
+          if (onBoard(r + dir, f) && !grid[r + dir][f]) {
+            if (r + dir === promoRank) {
+              for (const pc of ['q', 'r', 'b', 'n']) add(r, f, r + dir, f, { promo: pc });
+            } else {
+              add(r, f, r + dir, f);
+              if (r === startRank && !grid[r + 2 * dir][f]) add(r, f, r + 2 * dir, f);
+            }
+          }
+          for (const df of [-1, 1]) {
+            const tr = r + dir, tf = f + df;
+            if (!onBoard(tr, tf)) continue;
+            if (grid[tr][tf] && pieceSide(grid[tr][tf]) === opp) {
+              if (tr === promoRank) {
+                for (const pc of ['q', 'r', 'b', 'n']) add(r, f, tr, tf, { promo: pc });
+              } else {
+                add(r, f, tr, tf);
+              }
+            } else if (!grid[tr][tf] && pos.ep === squareName(tr, tf)) {
+              add(r, f, tr, tf, { ep: true });
+            }
+          }
+        } else if (LEAP_DELTAS[t]) {
+          for (const d of LEAP_DELTAS[t]) {
+            const tr = r + d[0], tf = f + d[1];
+            if (!onBoard(tr, tf)) continue;
+            const q = grid[tr][tf];
+            if (!q || pieceSide(q) === opp) add(r, f, tr, tf, null);
+          }
+        } else {
+          const rays = t === 'r' ? SLIDER_RAYS.r : t === 'b' ? SLIDER_RAYS.b : SLIDER_RAYS.q;
+          for (const d of rays) {
+            let tr = r + d[0], tf = f + d[1];
+            while (onBoard(tr, tf)) {
+              const q = grid[tr][tf];
+              if (!q) {
+                add(r, f, tr, tf, null);
+              } else {
+                if (pieceSide(q) === opp) add(r, f, tr, tf, null);
+                break;
+              }
+              tr += d[0]; tf += d[1];
+            }
+          }
+        }
+      }
+    }
+
+    // Castling: rights present, king and rook on home squares, path clear and
+    // the king never passes through or lands on an attacked square.
+    const home = me === 'w' ? 7 : 0;
+    const king = me === 'w' ? 'K' : 'k';
+    const rook = me === 'w' ? 'R' : 'r';
+    if (grid[home][4] === king) {
+      if ((pos.castling.indexOf(me === 'w' ? 'K' : 'k') !== -1) && grid[home][7] === rook &&
+          !grid[home][5] && !grid[home][6] &&
+          !isAttacked(grid, home, 4, opp) && !isAttacked(grid, home, 5, opp) && !isAttacked(grid, home, 6, opp)) {
+        add(home, 4, home, 6, { castle: true });
+      }
+      if ((pos.castling.indexOf(me === 'w' ? 'Q' : 'q') !== -1) && grid[home][0] === rook &&
+          !grid[home][1] && !grid[home][2] && !grid[home][3] &&
+          !isAttacked(grid, home, 4, opp) && !isAttacked(grid, home, 3, opp) && !isAttacked(grid, home, 2, opp)) {
+        add(home, 4, home, 2, { castle: true });
+      }
+    }
+
+    const legal = [];
+    for (const m of moves) {
+      const g = grid.map(function(row) { return row.slice(); });
+      g[m.tr][m.tf] = m.promo ? (me === 'w' ? m.promo.toUpperCase() : m.promo) : g[m.fr][m.ff];
+      g[m.fr][m.ff] = null;
+      if (m.ep) g[m.fr][m.tf] = null; // captured pawn sits beside the mover
+      if (m.castle) {
+        if (m.tf === 6) { g[m.tr][5] = g[m.tr][7]; g[m.tr][7] = null; }
+        else { g[m.tr][3] = g[m.tr][0]; g[m.tr][0] = null; }
+      }
+      const ks = findKing(g, me);
+      if (ks && !isAttacked(g, ks[0], ks[1], opp)) {
+        legal.push(squareName(m.fr, m.ff) + squareName(m.tr, m.tf) + (m.promo || ''));
+      }
+    }
+    return legal;
+  } catch (e) {
+    return [];
+  }
+}
+// ---- END LEGAL MOVE GENERATION ----
+
+// A position is "quiet" - no strategy to follow - when nobody has a forced
+// mate on the board, the evaluation is within a small band around equal, and
+// there is no tablebase verdict. Those are the only positions where deviating
+// from the engine's top choice is safe.
+function isQuietPosition(engine) {
+  if (!engine || !Array.isArray(engine.moves) || !engine.moves.length) return false;
+  if (engine.tablebase) return false;
+  for (const line of engine.moves) {
+    if (line.mate != null) return false;
+  }
+  const topCp = engine.moves[0].evaluation;
+  if (topCp == null) return false;
+  return Math.abs(topCp) <= AUTO_NORMAL_MAX_EVAL_CP;
+}
+
+// Rolls the 1-in-5 chance and, on a hit, returns one of the engine's
+// alternative lines (its 2nd/3rd choice - a "normal" move) plus a random
+// think time below ten seconds. Returns null whenever anything about the
+// situation says "play the best move".
+function decideAutoPlayDeviation(result, bestUci) {
+  const engine = result.engine;
+  if (!isQuietPosition(engine)) return null;
+  if (Math.floor(Math.random() * AUTO_NORMAL_ONE_IN) !== 0) return null;
+  const legal = new Set(legalMovesFromFen(result.fen));
+  if (legal.size < 2) return null;
+  const bestKey = bestUci.substring(0, 4);
+  const seen = new Set();
+  const alternatives = [];
+  for (const line of engine.moves.slice(1)) {
+    let u = (line.move || '').trim();
+    if (!/^[a-h][1-8][a-h][1-8]/.test(u)) u = (line.line || '').split(' ')[0];
+    u = (u || '').substring(0, 5);
+    if (!legal.has(u) || u.substring(0, 4) === bestKey || seen.has(u)) continue;
+    seen.add(u);
+    alternatives.push(u);
+  }
+  if (!alternatives.length) return null;
+  const uci = alternatives[Math.floor(Math.random() * alternatives.length)];
+  // Uniform think time in [min, max): always strictly below ten seconds.
+  const delayMs = AUTO_DELAY_MIN_MS +
+    Math.floor(Math.random() * (AUTO_DELAY_MAX_MS - AUTO_DELAY_MIN_MS));
+  logAnalysis('auto-play normal move ' + uci + ' (engine said ' + bestKey + '), playing in ' +
+    (delayMs / 1000).toFixed(1) + 's');
+  return { uci: uci, delayMs: delayMs };
+}
+
 async function handleBoardUpdate(fen, senderTabId) {
   if (analysisTimeout) clearTimeout(analysisTimeout);
   analysisTimeout = setTimeout(async function() {
@@ -492,6 +747,16 @@ async function handleBoardUpdate(fen, senderTabId) {
       if (!/^[a-h][1-8][a-h][1-8]/.test(uci)) {
         uci = (top.line || '').split(' ')[0];
       }
+      // Auto-play humaniser: only the played move is swapped; the popup
+      // keeps showing the engine's real best line.
+      let playDelayMs = 0;
+      if (settings.autoPlay && /^[a-h][1-8][a-h][1-8]/.test(uci)) {
+        const deviation = decideAutoPlayDeviation(result, uci);
+        if (deviation) {
+          uci = deviation.uci;
+          playDelayMs = deviation.delayMs;
+        }
+      }
       if (/^[a-h][1-8][a-h][1-8]/.test(uci)) {
         const sendArrow = function(tabId) {
           if (!tabId) return;
@@ -499,7 +764,8 @@ async function handleBoardUpdate(fen, senderTabId) {
             type: 'draw-arrow',
             from: uci.substring(0, 2), to: uci.substring(2, 4),
             color: '#ff6b35',
-            play: !!settings.autoPlay
+            play: !!settings.autoPlay,
+            playDelayMs: playDelayMs
           }).catch(function() {});
         };
         if (senderTabId) {
