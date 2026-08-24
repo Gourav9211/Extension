@@ -18,6 +18,11 @@ let searchesStarted = 0;
 let bestmovesSeen = 0;
 let settings = { depth: 22, multiPv: 3, sound: true, debounceMs: 500, classify: true, autoPlay: false, geminiPrompt: '' };
 
+// Lifecycle diagnostics visible in the service worker console
+// (chrome://extensions -> Chess Position Analyst -> "Inspect views: service worker").
+function logEngine(msg) { console.log('[engine]', msg); }
+function logAnalysis(msg) { console.log('[analysis]', msg); }
+
 const OPENINGS = {
   'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR': "King's Pawn",
   'rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR': "Queen's Pawn",
@@ -206,10 +211,15 @@ function warmEngine(fen) {
 }
 
 function processEngineLine(text) {
+  if (/^info string/.test(text)) {
+    logEngine(text.replace(/^info string\s*/, ''));
+    if (/falling back|failed to load|init failed|worker error/.test(text)) console.warn('[engine]', text);
+  }
   if (text === 'uciok') {
     engineReady = true;
     searchesStarted = 0;
     bestmovesSeen = 0;
+    logEngine('ready (uciok)');
     // Reset transposition tables exactly once per engine boot. Never between
     // searches: keeping the hash warm across moves is a major speed win.
     sfCommand('ucinewgame');
@@ -452,8 +462,10 @@ async function debuggerPlay(tabId, from, to, fallbackPoints) {
 async function handleBoardUpdate(fen, senderTabId) {
   if (analysisTimeout) clearTimeout(analysisTimeout);
   analysisTimeout = setTimeout(async function() {
+    const t0 = Date.now();
     try {
       const result = await analyzePosition(fen, { explain: 'async' });
+      logAnalysis(result.fen.split(' ')[0] + ' depth ' + result.engine.depth + ' in ' + ((Date.now() - t0) / 1000).toFixed(1) + 's');
       sendAnalysisToPopup(result);
       const top = result.engine.moves[0];
       let uci = top.uci || top.move || '';
@@ -485,6 +497,7 @@ async function handleBoardUpdate(fen, senderTabId) {
       }).catch(function() {});
     } catch (error) {
       if (/Superseded/i.test(error.message || '')) return;
+      console.warn('[analysis] failed after ' + ((Date.now() - t0) / 1000).toFixed(1) + 's:', error.message);
       sendAnalysisToPopup({ ok: false, error: error.message });
     }
   }, settings.debounceMs);
@@ -538,6 +551,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
   if (message.type === 'sf-engine-loaded') {
+    logEngine('worker booting (' + (engineReady ? 'already ready?' : 'awaiting uci') + ')');
     if (!engineReady) sfCommand('uci');
     return false;
   }
