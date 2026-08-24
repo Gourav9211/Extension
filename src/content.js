@@ -277,7 +277,7 @@ function sendFenUpdate() {
         // shallow background search so the next user-side analysis is fast.
         if (stm && position.fen !== lastWarmFen) {
           lastWarmFen = position.fen;
-          chrome.runtime.sendMessage({ type: 'warm-position', fen: position.fen }).catch(function() {});
+          trySend({ type: 'warm-position', fen: position.fen });
         }
         clearArrow();
         return;
@@ -290,7 +290,7 @@ function sendFenUpdate() {
 
     if (position.fen !== lastFen) {
       lastFen = position.fen;
-      chrome.runtime.sendMessage({ type: 'board-update', fen: position.fen });
+      trySend({ type: 'board-update', fen: position.fen });
     }
   } catch (error) {
     if (error.message !== lastErrorLogged) {
@@ -370,6 +370,46 @@ function currentPlacement() {
   try { return capturePosition().fen.split(' ')[0]; } catch (e) { return null; }
 }
 
+// Re-verify RIGHT NOW that it is genuinely the user's turn. Popup-initiated
+// board updates bypass sendFenUpdate's gating, so without this check an
+// enemy-turn analysis could trigger auto-play of the opponent's pieces.
+function isUsersTurnNow() {
+  try {
+    const board = (observedBoard && observedBoard.isConnected) ? observedBoard : findBoard();
+    if (!board) return false;
+    const userColor = isBlackOrientation(board) ? 'b' : 'w';
+    const pos = capturePosition();
+    trackTurnFromDiff(pos.fen.split(' ')[0]);
+    let stm = detectSideToMove(board, collectPieces(board));
+    if (!stm && lastMoveBy) stm = lastMoveBy === 'w' ? 'b' : 'w';
+    if (!stm && pos.fen.split(' ')[0] === START_PLACEMENT) stm = 'w';
+    return stm === userColor;
+  } catch (e) { return false; }
+}
+
+// The extension can be reloaded while this tab stays open; after that every
+// runtime call throws. Detect it once, disconnect cleanly, and tell the user.
+let extensionDead = false;
+function markExtensionDead() {
+  if (extensionDead) return true;
+  extensionDead = true;
+  stopObserving();
+  clearArrow();
+  console.warn('Chess extension: extension was reloaded - refresh this page to reconnect.');
+  return true;
+}
+function contextDead(err) {
+  return /context invalidated/i.test((err && err.message) || '');
+}
+function trySend(msg) {
+  try {
+    const p = chrome.runtime.sendMessage(msg);
+    if (p && p.catch) p.catch(function(e) { if (contextDead(e)) markExtensionDead(); });
+  } catch (e) {
+    if (contextDead(e)) markExtensionDead();
+  }
+}
+
 function syntheticFallback(pts) {
   pressAt(pts[0].x, pts[0].y);
   setTimeout(() => pressAt(pts[1].x, pts[1].y), 150);
@@ -399,10 +439,18 @@ function attemptAutoPlay(from, to, pts, before, attempt) {
       return;
     }
     console.warn('Chess extension: auto-play failed - board did not change. Reload the extension, then check chrome://extensions for errors.');
-    chrome.runtime.sendMessage({ type: 'auto-play-failed' }).catch(function() {});
+    trySend({ type: 'auto-play-failed' });
   };
-  chrome.runtime.sendMessage({ type: 'auto-play-move', from: from, to: to, points: pts })
-    .then((resp) => {
+  let resp = null;
+  try {
+    resp = chrome.runtime.sendMessage({ type: 'auto-play-move', from: from, to: to, points: pts });
+  } catch (e) {
+    if (contextDead(e)) { markExtensionDead(); return; }
+    resp = null;
+  }
+  Promise.resolve(resp)
+    .then((r) => {
+      if (contextDead(r)) return;
       if (!resp || !resp.ok) {
         console.warn('Chess extension: CDP auto-play unavailable (' + ((resp && resp.reason) || 'no response') + '), using synthetic clicks');
         syntheticFallback(pts);
@@ -412,6 +460,7 @@ function attemptAutoPlay(from, to, pts, before, attempt) {
       setTimeout(() => verify(true), 900);
     })
     .catch((err) => {
+      if (contextDead(err)) { markExtensionDead(); return; }
       console.warn('Chess extension: CDP auto-play unavailable (' + (err && err.message) + '), using synthetic clicks');
       syntheticFallback(pts);
       setTimeout(() => verify(false), 700);
@@ -420,6 +469,11 @@ function attemptAutoPlay(from, to, pts, before, attempt) {
 
 function playMove(from, to) {
   if (!/^[a-h][1-8]$/.test(from) || !/^[a-h][1-8]$/.test(to)) return;
+  // hard gate: never touch the board unless it is verifiably the user's turn
+  if (!isUsersTurnNow()) {
+    console.warn('Chess extension: auto-play blocked - not the user\'s turn.');
+    return;
+  }
   const board = (observedBoard && observedBoard.isConnected) ? observedBoard : findBoard();
   if (!board) return;
   const geo = boardGeometry(board);
@@ -632,7 +686,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === 'draw-arrow') {
     drawArrow(message.from, message.to, message.color);
-    if (message.play) playMove(message.from, message.to);
+    if (message.play && !extensionDead && isUsersTurnNow()) playMove(message.from, message.to);
     sendResponse({ ok: true });
     return true;
   }
