@@ -87,14 +87,35 @@ function renderEval(engine) {
   evalFill.style.background = clamped > 52 ? '#fffdf7' : clamped < 48 ? '#1d2824' : '#888';
 }
 
+function formatEvalShort(m) {
+  if (m.mate != null) return 'M' + m.mate;
+  if (m.evaluation != null) {
+    const pawns = (m.evaluation / 100).toFixed(1);
+    return pawns > 0 ? '+' + pawns : pawns;
+  }
+  return '';
+}
+
 function renderMoves(engine) {
   moveEl.textContent = engine.moves[0].move;
   altMovesEl.innerHTML = '';
-  engine.moves.slice(1).forEach(function(m) {
-    const chip = document.createElement('span');
-    chip.className = 'move-chip';
-    chip.textContent = m.move;
-    altMovesEl.appendChild(chip);
+  const ordinals = ['2nd best', '3rd best'];
+  engine.moves.slice(1).forEach(function(m, i) {
+    const row = document.createElement('div');
+    row.className = 'alt-row';
+    const rank = document.createElement('span');
+    rank.className = 'alt-rank';
+    rank.textContent = ordinals[i] || ((i + 2) + 'th best');
+    const move = document.createElement('span');
+    move.className = 'alt-move';
+    move.textContent = m.move;
+    const evalEl = document.createElement('span');
+    evalEl.className = 'alt-eval';
+    evalEl.textContent = formatEvalShort(m);
+    row.appendChild(rank);
+    row.appendChild(move);
+    row.appendChild(evalEl);
+    altMovesEl.appendChild(row);
   });
 }
 

@@ -11,7 +11,15 @@ const DEFAULTS = {
   classify: true,
   geminiKey: '',
   geminiPrompt: '',
-  debounceMs: 500
+  debounceMs: 500,
+  engineMoveTimeMs: 8000,
+  autoDelayMinMs: 2500,
+  autoDelayMaxMs: 4000,
+  autoSlowOneIn: 3,
+  autoSlowMinMs: 5500,
+  autoSlowMaxMs: 10000,
+  autoNormalOneIn: 5,
+  autoNormalEvalCp: 150
 };
 
 function setStatus(msg) {

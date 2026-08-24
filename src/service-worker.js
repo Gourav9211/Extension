@@ -7,19 +7,25 @@ const MAX_CACHE_SIZE = 50;
 // so the popup can offer the update button.
 const UPDATE_REPO = 'Gourav9211/Extension';
 const UPDATE_CHECK_INTERVAL_MS = 3600000;
-// Auto-play humaniser: every auto-played move first waits a random 2.5-4s,
-// and one move in three crosses 5s (up to just under 10s), so delivery never
-// looks instant. On top of that, roughly one move in five, when the position
-// is quiet (no mate in sight, evaluation within +-1.5 pawns, no tablebase
-// verdict), swaps the engine's top choice for one of its alternative lines -
-// a plausible "normal" move. Critical positions always get the engine's best.
-const AUTO_NORMAL_ONE_IN = 5;
-const AUTO_NORMAL_MAX_EVAL_CP = 150;
-const AUTO_DELAY_MIN_MS = 2500;
-const AUTO_DELAY_MAX_MS = 4000;
-const AUTO_SLOW_ONE_IN = 3;
-const AUTO_SLOW_MIN_MS = 5500;
-const AUTO_SLOW_MAX_MS = 10000;
+// Auto-play humaniser defaults - every value is user-configurable in the
+// options page (see settings.auto* below). Every auto-played move first waits
+// a random autoDelayMin-autoDelayMax window; one move in autoSlowOneIn crosses
+// the slow band instead. Roughly one move in autoNormalOneIn, when the
+// position is quiet (evaluation within autoNormalEvalCp centipawns, no mate
+// in sight, no tablebase verdict), swaps the engine's top choice for one of
+// its alternative lines - a plausible "normal" move. Critical positions
+// always get the engine's best.
+const AUTO_DEFAULTS = {
+  autoDelayMinMs: 2500,
+  autoDelayMaxMs: 4000,
+  autoSlowMinMs: 5500,
+  autoSlowMaxMs: 10000,
+  autoSlowOneIn: 3,
+  autoNormalOneIn: 5,
+  autoNormalEvalCp: 150,
+  engineMoveTimeMs: 8000,
+  debounceMs: 500
+};
 
 let analysisTimeout = null;
 let positionCache = new Map();
@@ -34,7 +40,14 @@ let lastEval = null;
 // of the newer one.
 let searchesStarted = 0;
 let bestmovesSeen = 0;
-let settings = { depth: 22, multiPv: 3, sound: true, debounceMs: 500, classify: true, autoPlay: false, geminiPrompt: '' };
+let settings = Object.assign({ depth: 22, multiPv: 3, sound: true, classify: true, autoPlay: false, geminiPrompt: '' }, AUTO_DEFAULTS);
+
+// Random integer in [min, max]; tolerates a swapped min/max from user input.
+function randMs(min, max) {
+  const lo = Math.min(min, max);
+  const hi = Math.max(min, max);
+  return lo + Math.floor(Math.random() * (hi - lo + 1));
+}
 
 // Lifecycle diagnostics visible in the service worker console
 // (chrome://extensions -> Chess Position Analyst -> "Inspect views: service worker").
@@ -114,14 +127,21 @@ function setCache(fen, data) {
 }
 
 async function loadSettings() {
-  const stored = await chrome.storage.local.get(['depth', 'multiPv', 'sound', 'debounceMs', 'classify', 'autoPlay', 'geminiPrompt']);
+  const keys = ['depth', 'multiPv', 'sound', 'classify', 'autoPlay', 'geminiPrompt'].concat(Object.keys(AUTO_DEFAULTS));
+  const stored = await chrome.storage.local.get(keys);
   if (stored.depth) settings.depth = stored.depth;
   if (stored.autoPlay != null) settings.autoPlay = !!stored.autoPlay;
   if (stored.multiPv) settings.multiPv = stored.multiPv;
   if (stored.sound != null) settings.sound = stored.sound;
-  if (stored.debounceMs) settings.debounceMs = stored.debounceMs;
   if (stored.classify != null) settings.classify = stored.classify;
   if (stored.geminiPrompt != null) settings.geminiPrompt = stored.geminiPrompt;
+  for (const key of Object.keys(AUTO_DEFAULTS)) {
+    const v = parseInt(stored[key], 10);
+    if (!isNaN(v) && v > 0) settings[key] = v;
+    // A frequency of exactly 0 is meaningful ("never") - everything else
+    // must stay positive so e.g. a 0ms move time cannot hang the engine.
+    else if (!isNaN(v) && v === 0 && /OneIn$/.test(key)) settings[key] = 0;
+  }
 }
 
 function detectOpening(fen) {
@@ -241,7 +261,7 @@ function evaluateWithStockfish(fen, multiPv) {
         pendingEval = null;
         reject(new Error('Engine evaluation timeout'));
       }
-    }, Math.max(18000, settings.depth * 1200));
+    }, Math.max(18000, settings.depth * 1200, settings.engineMoveTimeMs + 3000));
     // Only send 'stop' when something is actually running - a stray stop
     // racing a fresh 'go' could truncate the new search.
     if (pendingEval) sfCommand('stop');
@@ -250,7 +270,7 @@ function evaluateWithStockfish(fen, multiPv) {
     // the usual stopping criterion on easy positions. Complex middlegames
     // will legitimately stop at a lower reached-depth - that is the time
     // budget doing its job, not a bug.
-    sfCommand('go depth ' + settings.depth + ' movetime 8000 multipv ' + multiPv);
+    sfCommand('go depth ' + settings.depth + ' movetime ' + settings.engineMoveTimeMs + ' multipv ' + multiPv);
     searchesStarted += 1;
   });
 }
@@ -292,7 +312,7 @@ function processEngineLine(text) {
     // speed win.
     sfCommand('ucinewgame');
     loadSettings().then(function() {
-      logEngine('search limits: depth cap ' + settings.depth + ', movetime 8000ms, multipv ' + settings.multiPv);
+      logEngine('search limits: depth cap ' + settings.depth + ', movetime ' + settings.engineMoveTimeMs + 'ms, multipv ' + settings.multiPv);
     });
     for (const w of engineReadyWaiters) w.resolve();
     engineReadyWaiters = [];
@@ -742,25 +762,28 @@ function isQuietPosition(engine) {
   }
   const topCp = engine.moves[0].evaluation;
   if (topCp == null) return false;
-  return Math.abs(topCp) <= AUTO_NORMAL_MAX_EVAL_CP;
+  return Math.abs(topCp) <= settings.autoNormalEvalCp;
 }
 
-// Think time for every auto-played move: a random 2.5-4s baseline, with one
-// move in three crossing 5s (uniform up to just under ten seconds).
+// Think time for every auto-played move: a random baseline window, with one
+// move in autoSlowOneIn crossing the slow band instead (0 disables the slow
+// band entirely).
 function autoPlayDelay() {
-  if (Math.floor(Math.random() * AUTO_SLOW_ONE_IN) === 0) {
-    return AUTO_SLOW_MIN_MS + Math.floor(Math.random() * (AUTO_SLOW_MAX_MS - AUTO_SLOW_MIN_MS));
+  const slowOneIn = settings.autoSlowOneIn;
+  if (slowOneIn >= 1 && Math.floor(Math.random() * slowOneIn) === 0) {
+    return randMs(settings.autoSlowMinMs, settings.autoSlowMaxMs);
   }
-  return AUTO_DELAY_MIN_MS + Math.floor(Math.random() * (AUTO_DELAY_MAX_MS - AUTO_DELAY_MIN_MS));
+  return randMs(settings.autoDelayMinMs, settings.autoDelayMaxMs);
 }
 
-// Rolls the 1-in-5 chance and, on a hit, returns one of the engine's
+// Rolls the 1-in-N chance and, on a hit, returns one of the engine's
 // alternative lines (its 2nd/3rd choice - a "normal" move). Returns null
 // whenever anything about the situation says "play the best move".
 function decideAutoPlayDeviation(result, bestUci) {
   const engine = result.engine;
   if (!isQuietPosition(engine)) return null;
-  if (Math.floor(Math.random() * AUTO_NORMAL_ONE_IN) !== 0) return null;
+  const normalOneIn = settings.autoNormalOneIn;
+  if (normalOneIn < 1 || Math.floor(Math.random() * normalOneIn) !== 0) return null;
   const legal = new Set(legalMovesFromFen(result.fen));
   if (legal.size < 2) return null;
   const bestKey = bestUci.substring(0, 4);
@@ -788,7 +811,7 @@ async function handleBoardUpdate(fen, senderTabId) {
       const result = await analyzePosition(fen, { explain: 'async' });
       logAnalysis(result.fen.split(' ')[0] + ' depth ' + result.engine.depth + ' in ' +
         ((Date.now() - t0) / 1000).toFixed(1) + 's' +
-        (result.engine.tablebase ? ' (tablebase)' : ' (budget 8s, cap depth ' + settings.depth + ')'));
+        (result.engine.tablebase ? ' (tablebase)' : ' (budget ' + settings.engineMoveTimeMs + 'ms, cap depth ' + settings.depth + ')'));
       sendAnalysisToPopup(result);
       const top = result.engine.moves[0];
       let uci = top.uci || top.move || '';

@@ -58,6 +58,14 @@
       <input id="depth" type="number" min="10" max="45" value="22">
     </div>
     <div class="row">
+      <label>Engine move time (ms per position)</label>
+      <input id="engineMoveTimeMs" type="number" min="1000" max="60000" step="500" value="8000">
+    </div>
+    <div class="row">
+      <label>Position update debounce (ms)</label>
+      <input id="debounceMs" type="number" min="100" max="5000" step="100" value="500">
+    </div>
+    <div class="row">
       <label>Multi-PV (lines)</label>
       <select id="multiPv">
         <option value="1">1</option>
@@ -75,6 +83,48 @@
       Clicks the suggested move on the board automatically. Engine assistance
       and automation violate chess.com fair-play rules and can get your account
       banned - intended for practice against the computer.
+    </p>
+  </div>
+
+  <div class="section">
+    <h2>Auto-play timing</h2>
+    <p style="margin:0 0 12px;color:#65716b;font-size:12px;">
+      Humanised think times for auto-played moves. Each move waits a random
+      window; occasionally it takes longer, and occasionally a quiet position
+      gets an alternative ("normal") move instead of the engine's best.
+    </p>
+    <div class="row">
+      <label>Think time min (ms)</label>
+      <input id="autoDelayMinMs" type="number" min="0" max="600000" step="100" value="2500">
+    </div>
+    <div class="row">
+      <label>Think time max (ms)</label>
+      <input id="autoDelayMaxMs" type="number" min="0" max="600000" step="100" value="4000">
+    </div>
+    <div class="row">
+      <label>Slow moves - frequency (1 in N, 0 = never)</label>
+      <input id="autoSlowOneIn" type="number" min="0" max="100" value="3">
+    </div>
+    <div class="row">
+      <label>Slow think time min (ms)</label>
+      <input id="autoSlowMinMs" type="number" min="0" max="600000" step="100" value="5500">
+    </div>
+    <div class="row">
+      <label>Slow think time max (ms)</label>
+      <input id="autoSlowMaxMs" type="number" min="0" max="600000" step="100" value="10000">
+    </div>
+    <div class="row">
+      <label>Alternative moves - frequency (1 in N, 0 = never)</label>
+      <input id="autoNormalOneIn" type="number" min="0" max="100" value="5">
+    </div>
+    <div class="row">
+      <label>Quiet-position limit (&plusmn; centipawns)</label>
+      <input id="autoNormalEvalCp" type="number" min="10" max="2000" step="10" value="150">
+    </div>
+    <p style="margin:4px 0 0;color:#a05a2c;font-size:12px;">
+      Alternative moves are only played in quiet positions: no mate on the
+      board, evaluation within the limit above, no tablebase verdict. Mates and
+      critical positions always get the engine's best move.
     </p>
   </div>
 
