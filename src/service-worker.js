@@ -61,6 +61,9 @@ function randMs(min, max) {
 let lastTickAt = 0;
 let lastTickTurn = '';
 let opponentPaceMs = 0;
+// When the opponent's latest move landed (arrival of our-turn tick) - the
+// anchor for deadline-based matched timing.
+let opponentMovedAtMs = 0;
 const OPPONENT_GAP_CAP_MS = 300000;
 
 function trackTurnTick(userColor, turn, fen) {
@@ -69,15 +72,20 @@ function trackTurnTick(userColor, turn, fen) {
     lastTickAt = 0;
     lastTickTurn = '';
     opponentPaceMs = 0;
+    opponentMovedAtMs = 0;
     return;
   }
   const uc = userColor === 'b' ? 'b' : 'w';
   const opp = uc === 'w' ? 'b' : 'w';
   const now = Date.now();
-  const gap = lastTickAt ? now - lastTickAt : 0;
-  if (turn === uc && lastTickTurn === opp && gap > 0 && gap <= OPPONENT_GAP_CAP_MS) {
-    opponentPaceMs = opponentPaceMs ? Math.round(opponentPaceMs * 0.6 + gap * 0.4) : gap;
-    logAnalysis('opponent pace ~' + (opponentPaceMs / 1000).toFixed(1) + 's');
+  if (turn === uc) {
+    // Their move just completed - this instant is t=0 for matched timing.
+    opponentMovedAtMs = now;
+    const gap = lastTickAt ? now - lastTickAt : 0;
+    if (lastTickTurn === opp && gap > 0 && gap <= OPPONENT_GAP_CAP_MS) {
+      opponentPaceMs = opponentPaceMs ? Math.round(opponentPaceMs * 0.6 + gap * 0.4) : gap;
+      logAnalysis('opponent pace ~' + (opponentPaceMs / 1000).toFixed(1) + 's');
+    }
   }
   lastTickAt = now;
   lastTickTurn = turn || '';
@@ -809,15 +817,19 @@ function isQuietPosition(engine) {
   return Math.abs(topCp) <= settings.autoNormalEvalCp;
 }
 
-// Think time for every auto-played move. In 'match' mode the move lands one
-// autoBeatByMs quicker than the opponent's smoothed pace (clamped to a safe
-// floor so we never answer instantly); until the opponent has been timed -
-// or in 'random' mode - a random baseline window is used, with one move in
-// autoSlowOneIn crossing the slow band instead (0 disables the slow band).
+// Think time for every auto-played move. In 'match' mode the TOTAL wall-clock
+// time from the opponent's move to our click should be their smoothed pace
+// minus autoBeatByMs - so analysis time is subtracted, and if the engine
+// already burned past the deadline we fire almost immediately. Clamped to a
+// safe floor so we never answer instantly, capped at two minutes. Until the
+// opponent has been timed - or in 'random' mode - a random baseline window is
+// used, with one move in autoSlowOneIn crossing the slow band instead (0
+// disables the slow band).
 function autoPlayDelay() {
-  if (settings.autoTimingMode === 'match' && opponentPaceMs > 0) {
-    const target = opponentPaceMs - (settings.autoBeatByMs || 0);
-    return Math.max(700, Math.min(120000, target));
+  if (settings.autoTimingMode === 'match' && opponentPaceMs > 0 && opponentMovedAtMs > 0) {
+    const target = Math.max(700, Math.min(120000, opponentPaceMs - (settings.autoBeatByMs || 0)));
+    const elapsed = Date.now() - opponentMovedAtMs;
+    return Math.max(200, target - elapsed);
   }
   const slowOneIn = settings.autoSlowOneIn;
   if (slowOneIn >= 1 && Math.floor(Math.random() * slowOneIn) === 0) {
@@ -873,9 +885,11 @@ async function handleBoardUpdate(fen, senderTabId) {
       if (!/^[a-h][1-8][a-h][1-8]/.test(uci)) {
         uci = (top.line || '').split(' ')[0];
       }
-      // Auto-play humaniser: every played move gets a randomised think
-      // time; only a deviating move is swapped, the popup keeps showing the
-      // engine's real best line.
+      // Auto-play humaniser: every played move gets a humanised think time -
+      // matched to the opponent's pace or a random window - and one move in
+      // autoNormalOneIn quiet positions swaps in an alternative (2nd/3rd
+      // best) move. The deviation applies in BOTH timing modes; the popup
+      // keeps showing the engine's real best line.
       let playDelayMs = 0;
       if (settings.autoPlay && /^[a-h][1-8][a-h][1-8]/.test(uci)) {
         playDelayMs = autoPlayDelay();
@@ -883,6 +897,9 @@ async function handleBoardUpdate(fen, senderTabId) {
         if (deviation) {
           uci = deviation.uci;
         }
+        logAnalysis('auto-play in ' + (playDelayMs / 1000).toFixed(1) + 's' +
+          ' (' + settings.autoTimingMode + ' mode, pace ~' +
+          (opponentPaceMs / 1000).toFixed(1) + 's)');
       }
       if (/^[a-h][1-8][a-h][1-8]/.test(uci)) {
         // Ranked arrows: best (orange) plus 2nd/3rd choices in their own
