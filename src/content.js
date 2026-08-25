@@ -272,6 +272,22 @@ function sendFenUpdate() {
       let stm = detectSideToMove(board, collectPieces(board));
       if (!stm && lastMoveBy) stm = lastMoveBy === 'w' ? 'b' : 'w';
       if (!stm && parts[0] === START_PLACEMENT) stm = 'w';
+
+      // Pace telemetry: send ticks for BOTH sides' turns so the service
+      // worker can measure opponent pace AND user pace. Must happen before
+      // the opponent-turn early return.
+      if (stm && position.fen !== lastTickFen) {
+        lastTickFen = position.fen;
+        console.warn('[Chess ext] turn-tick: turn=' + stm + ' you=' + userColor + ' fen=' + position.fen.split(' ')[0].substring(0, 20) + '...');
+        trySend({
+          type: 'turn-tick',
+          userColor: userColor,
+          turn: stm,
+          fen: position.fen,
+          oppElo: detectOpponentElo(board)
+        });
+      }
+
       if (!stm || stm !== userColor) {
         // Opponent's turn: keep the engine's transposition table warm with a
         // shallow background search so the next user-side analysis is fast.
@@ -285,22 +301,6 @@ function sendFenUpdate() {
       if (parts[1] !== stm) {
         parts[1] = stm;
         position.fen = parts.join(' ');
-      }
-      // Pace telemetry: one tick per newly seen side-to-move, for both
-      // turns. The service worker times the gap between an opponent-to-move
-      // tick and our-to-move tick to learn how fast the opponent plays, and
-      // carries the opponent's board rating for adaptive strength.
-      if (stm && position.fen !== lastTickFen) {
-        lastTickFen = position.fen;
-        const uc = isBlackOrientation(board) ? 'b' : 'w';
-        console.warn('[Chess ext] turn-tick: turn=' + stm + ' you=' + uc + ' fen=' + position.fen.split(' ')[0].substring(0, 20) + '...');
-        trySend({
-          type: 'turn-tick',
-          userColor: userColor,
-          turn: stm,
-          fen: position.fen,
-          oppElo: detectOpponentElo(board)
-        });
       }
     }
 
