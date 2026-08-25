@@ -165,10 +165,11 @@
     <h2>Auto-play timing</h2>
     <p class="hint" style="margin:0 0 12px;">
       Humanised think times for auto-played moves. "Match opponent" replies just
-      faster than their measured pace. "Balance with both players" averages your
-      pace and the opponent's to match the overall game tempo. "Random window"
-      uses fixed min/max values. Occasionally a quiet position gets an
-      alternative ("normal") move instead of the engine's best.
+      faster than their measured pace. "Balance with both players" also replies
+      faster than the opponent, using their pace as the reference. "Random window"
+      uses fixed min/max values. The "Max move time" cap applies to all modes.
+      Occasionally a quiet position gets an alternative ("normal") move instead
+      of the engine's best.
     </p>
     <div class="row">
       <label>Move timing</label>
@@ -181,6 +182,10 @@
     <div class="row">
       <label>Beat opponent by (ms)</label>
       <input id="autoBeatByMs" type="number" min="0" max="60000" step="100" value="1000">
+    </div>
+    <div class="row">
+      <label>Max move time (ms)</label>
+      <input id="maxAutoPlayMs" type="number" min="1000" max="60000" step="500" value="9000">
     </div>
     <div class="row">
       <label>Think time min (ms)</label>

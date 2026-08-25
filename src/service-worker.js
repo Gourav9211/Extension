@@ -28,7 +28,8 @@ const AUTO_DEFAULTS = {
   autoNormalOneIn: 5,
   autoNormalEvalCp: 150,
   engineMoveTimeMs: 8000,
-  debounceMs: 500
+  debounceMs: 500,
+  maxAutoPlayMs: 9000
 };
 
 let analysisTimeout = null;
@@ -915,42 +916,28 @@ function legalMovesFromFen(fen) {
 // minus autoBeatByMs (adjusted adaptively by rating) - so analysis time is
 // subtracted, and if the engine already burned past the deadline we fire
 // almost immediately. Clamped to a safe floor so we never answer instantly,
-// capped at two minutes. In 'balance' mode the target is the average of both
-// players' smoothed paces, making the engine match the overall game tempo.
-// Until the opponent has been timed - or in 'random' mode - a random baseline
-// window is used, with one move in autoSlowOneIn crossing the slow band
-// instead (0 disables the slow band).
+// capped at maxAutoPlayMs. In 'balance' mode the target is the opponent's
+// pace minus beat, so the engine is always faster than the opponent. When no
+// pace data exists yet, a random baseline window is used, with one move in
+// autoSlowOneIn crossing the slow band instead (0 disables the slow band).
 function autoPlayDelay() {
-  if (settings.autoTimingMode === 'match' && opponentPaceMs > 0 && opponentMovedAtMs > 0) {
+  const maxCap = settings.maxAutoPlayMs || 9000;
+  if ((settings.autoTimingMode === 'match' || settings.autoTimingMode === 'balance') && opponentMovedAtMs > 0) {
     const beat = (settings.autoBeatByMs || 0) + adaptiveParams().beatDeltaMs;
-    const target = Math.max(700, Math.min(120000, opponentPaceMs - beat));
-    const elapsed = Date.now() - opponentMovedAtMs;
-    return Math.max(200, target - elapsed);
-  }
-  if (settings.autoTimingMode === 'balance' && opponentMovedAtMs > 0) {
-    const beat = (settings.autoBeatByMs || 0) + adaptiveParams().beatDeltaMs;
-    // Blend opponent and user pace: if both are known, average them; otherwise
-    // fall back to whichever is available. The average reflects the overall
-    // game tempo so the engine doesn't feel like a different player.
-    let basePace = opponentPaceMs;
-    let paceSource = 'opponent';
-    if (opponentPaceMs > 0 && userPaceMs > 0) {
-      basePace = Math.round((opponentPaceMs + userPaceMs) / 2);
-      paceSource = 'avg(opp,user)';
-    } else if (userPaceMs > 0) {
-      basePace = userPaceMs;
-      paceSource = 'user-only';
-    }
+    // Always base on opponent pace so the engine is faster than them.
+    // user pace is tracked but not used for the delay — it's available for
+    // future features (e.g. pacing announcements).
+    const basePace = opponentPaceMs;
     if (basePace > 0) {
-      const target = Math.max(700, Math.min(120000, basePace - beat));
+      const target = Math.max(700, Math.min(maxCap, basePace - beat));
       const elapsed = Date.now() - opponentMovedAtMs;
-      logAnalysis('[balance] source=' + paceSource + ' base=' + (basePace / 1000).toFixed(1) + 's' +
+      logAnalysis('[' + settings.autoTimingMode + '] base=' + (basePace / 1000).toFixed(1) + 's' +
         ' opp=' + (opponentPaceMs / 1000).toFixed(1) + 's user=' + (userPaceMs / 1000).toFixed(1) + 's' +
         ' beat=' + beat + 'ms target=' + (target / 1000).toFixed(1) + 's elapsed=' + (elapsed / 1000).toFixed(1) + 's' +
         ' delay=' + Math.max(200, target - elapsed) + 'ms');
       return Math.max(200, target - elapsed);
     }
-    logAnalysis('[balance] no pace data yet, falling back to random');
+    logAnalysis('[' + settings.autoTimingMode + '] no pace data yet, falling back to random');
   }
   const slowOneIn = settings.autoSlowOneIn;
   if (slowOneIn >= 1 && Math.floor(Math.random() * slowOneIn) === 0) {
@@ -1018,19 +1005,13 @@ async function handleBoardUpdate(fen, senderTabId) {
       // In matched or balanced mode, shrink the engine's time budget so the
       // search can finish inside the reply deadline instead of blowing past it.
       let movetimeMs;
+      const maxCap = settings.maxAutoPlayMs || 9000;
       if ((settings.autoTimingMode === 'match' || settings.autoTimingMode === 'balance') &&
           settings.autoPlay && opponentMovedAtMs > 0) {
         const beat = (settings.autoBeatByMs || 0) + adaptiveParams().beatDeltaMs;
-        let basePace = opponentPaceMs;
-        if (settings.autoTimingMode === 'balance') {
-          if (opponentPaceMs > 0 && userPaceMs > 0) {
-            basePace = Math.round((opponentPaceMs + userPaceMs) / 2);
-          } else if (userPaceMs > 0) {
-            basePace = userPaceMs;
-          }
-        }
+        const basePace = opponentPaceMs;
         if (basePace > 0) {
-          const target = Math.max(700, Math.min(120000, basePace - beat));
+          const target = Math.max(700, Math.min(maxCap, basePace - beat));
           movetimeMs = Math.max(500, Math.min(settings.engineMoveTimeMs,
             target - (Date.now() - opponentMovedAtMs) - 250));
           logAnalysis(settings.autoTimingMode + ' budget ' + Math.round(movetimeMs) + 'ms' +

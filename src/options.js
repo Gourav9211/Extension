@@ -22,7 +22,8 @@ const DEFAULTS = {
   autoSlowMinMs: 5500,
   autoSlowMaxMs: 10000,
   autoNormalOneIn: 5,
-  autoNormalEvalCp: 150
+  autoNormalEvalCp: 150,
+  maxAutoPlayMs: 9000
 };
 
 function setStatus(msg) {
