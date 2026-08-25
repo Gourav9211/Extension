@@ -329,36 +329,43 @@ async function checkForUpdate(force) {
 }
 
 async function ensureOffscreen() {
-  if (offscreenCreated) return;
+  if (offscreenCreated) { logEngine('offscreen already created'); return; }
   try {
     if (chrome.runtime.getContexts) {
       const contexts = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
       if (contexts && contexts.length) {
         offscreenCreated = true;
+        logEngine('offscreen found existing context');
         return;
       }
     }
+    logEngine('creating offscreen document...');
     await chrome.offscreen.createDocument({
       url: 'src/offscreen.html',
       reasons: ['WORKERS'],
       justification: 'Running Stockfish chess engine'
     });
     offscreenCreated = true;
+    logEngine('offscreen document created');
   } catch (e) {
     if (/already exists|single offscreen document/i.test(e.message || '')) {
       offscreenCreated = true;
+      logEngine('offscreen already exists (caught)');
     } else {
+      logEngine('offscreen creation FAILED: ' + e.message);
       throw e;
     }
   }
 }
 
 function waitForEngine(timeoutMs) {
-  if (engineReady) return Promise.resolve();
+  if (engineReady) { logEngine('engine already ready'); return Promise.resolve(); }
+  logEngine('waiting for engine, timeout=' + (timeoutMs || 15000) + 'ms');
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       const idx = engineReadyWaiters.indexOf(waiter);
       if (idx !== -1) engineReadyWaiters.splice(idx, 1);
+      logEngine('ENGINE INIT TIMEOUT after ' + (timeoutMs || 15000) + 'ms');
       reject(new Error('Engine init timeout'));
     }, timeoutMs || 15000);
     const waiter = { resolve: function() { clearTimeout(timer); resolve(); }, reject: reject };
@@ -548,7 +555,10 @@ async function explainWithGemini(fen, engine) {
 async function analyzePosition(fen, opts) {
   const explainMode = (opts && opts.explain) || 'await';
   await loadSettings();
+  await ensureOffscreen();
+  logEngine('waiting for engine (ready=' + engineReady + ')...');
   await waitForEngine(30000);
+  logEngine('engine ready, analyzing');
   const validated = validateFen(fen);
   const pieceCount = countPieces(validated);
 

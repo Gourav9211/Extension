@@ -38,24 +38,41 @@ function startEngine() {
   if (engine) return;
   const candidate = ENGINE_CANDIDATES[candidateIndex];
   const url = chrome.runtime.getURL(candidate.url);
-  engine = new Worker(url, candidate.type ? { type: candidate.type } : undefined);
+  console.log('[offscreen] starting engine #' + candidateIndex + ': ' + candidate.url + ' type=' + (candidate.type || 'classic'));
+  console.log('[offscreen] resolved URL: ' + url);
+  try {
+    engine = new Worker(url, candidate.type ? { type: candidate.type } : undefined);
+  } catch (e) {
+    console.error('[offscreen] Worker() constructor failed:', e);
+    failover();
+    return;
+  }
   gotUciOk = false;
   engine.onmessage = function(e) {
     const text = typeof e.data === 'string' ? e.data : (e.data && e.data.line);
-    if (typeof text !== 'string') return;
+    if (typeof text !== 'string') {
+      console.log('[offscreen] non-string message:', typeof e.data, e.data);
+      return;
+    }
+    console.log('[offscreen] engine says: ' + text.substring(0, 120));
     if (!gotUciOk && text.indexOf('uciok') === 0) {
       gotUciOk = true;
       clearTimeout(readyTimer);
       readyTimer = null;
+      console.log('[offscreen] engine READY');
     }
     report(text);
   };
   engine.onerror = function(e) {
+    console.error('[offscreen] worker error (gotUciOk=' + gotUciOk + '):', e.message || e);
     if (!gotUciOk) failover();
     else report('info string worker error: ' + (e.message || 'runtime error'));
   };
   readyTimer = setTimeout(function() {
-    if (!gotUciOk) failover();
+    if (!gotUciOk) {
+      console.warn('[offscreen] timeout after 12s - no uciok from ' + candidate.url);
+      failover();
+    }
   }, 12000);
   report('info string starting engine: ' + candidate.url);
   chrome.runtime.sendMessage({ type: 'sf-engine-loaded' }).catch(function() {});
