@@ -69,6 +69,8 @@ let opponentPaceMs = 0;
 let opponentMovedAtMs = 0;
 let opponentElo = 0;
 let userColor = '';
+let userPaceMs = 0;
+let lastUserTickAt = 0;
 const OPPONENT_GAP_CAP_MS = 300000;
 
 // MV3 wakes the service worker straight INTO a message handler, before the
@@ -86,7 +88,9 @@ function persistPaceState() {
       opponentPaceMs: opponentPaceMs,
       opponentMovedAtMs: opponentMovedAtMs,
       opponentElo: opponentElo,
-      userColor: userColor
+      userColor: userColor,
+      userPaceMs: userPaceMs,
+      lastUserTickAt: lastUserTickAt
     }
   }).catch(function() {});
 }
@@ -101,7 +105,9 @@ function persistPaceState() {
       opponentMovedAtMs = s.opponentMovedAtMs || 0;
       opponentElo = s.opponentElo || 0;
       userColor = s.userColor || '';
-      logAnalysis('restored pace state: ~' + (opponentPaceMs / 1000).toFixed(1) + 's, elo ' + (opponentElo || '?'));
+      userPaceMs = s.userPaceMs || 0;
+      lastUserTickAt = s.lastUserTickAt || 0;
+      logAnalysis('restored pace state: opp ~' + (opponentPaceMs / 1000).toFixed(1) + 's, you ~' + (userPaceMs / 1000).toFixed(1) + 's, elo ' + (opponentElo || '?'));
     }
     paceStateReady = true;
     while (pendingTicks.length) trackTurnTick.apply(null, pendingTicks.shift());
@@ -114,14 +120,18 @@ function persistPaceState() {
 function trackTurnTick(userColor_, turn, fen, oppElo) {
   if (!paceStateReady) {
     pendingTicks.push([userColor_, turn, fen, oppElo]);
+    logAnalysis('tick queued (pace state not ready): turn=' + turn);
     return;
   }
   // A fresh initial placement means a new game - forget the old pace.
   if ((fen || '').split(' ')[0] === START_PLACEMENT) {
+    logAnalysis('new game detected - resetting all pace data');
     lastTickAt = 0;
     lastTickTurn = '';
     opponentPaceMs = 0;
     opponentMovedAtMs = 0;
+    userPaceMs = 0;
+    lastUserTickAt = 0;
     persistPaceState();
     return;
   }
@@ -130,15 +140,29 @@ function trackTurnTick(userColor_, turn, fen, oppElo) {
   const uc = userColor_ === 'b' ? 'b' : 'w';
   const opp = uc === 'w' ? 'b' : 'w';
   const now = Date.now();
+  logAnalysis('tick: turn=' + turn + ' (you=' + uc + ', opp=' + opp + ') lastTurn=' + lastTickTurn);
   if (turn === uc) {
     // Their move just completed - this instant is t=0 for matched timing.
     opponentMovedAtMs = now;
     const gap = lastTickAt ? now - lastTickAt : 0;
     if (lastTickTurn === opp && gap > 0 && gap <= OPPONENT_GAP_CAP_MS) {
       opponentPaceMs = opponentPaceMs ? Math.round(opponentPaceMs * 0.6 + gap * 0.4) : gap;
-      logAnalysis('opponent pace ~' + (opponentPaceMs / 1000).toFixed(1) + 's' +
+      logAnalysis('opponent pace updated: raw=' + (gap / 1000).toFixed(1) + 's -> ema=' + (opponentPaceMs / 1000).toFixed(1) + 's' +
         (opponentElo ? ', elo ' + opponentElo : ''));
+    } else {
+      logAnalysis('opponent tick skipped: lastTurn=' + lastTickTurn + ' gap=' + (gap / 1000).toFixed(1) + 's');
     }
+  }
+  if (turn === opp) {
+    // User's move just completed - track their pace for balanced timing.
+    const userGap = lastUserTickAt ? now - lastUserTickAt : 0;
+    if (userGap > 0 && userGap <= OPPONENT_GAP_CAP_MS) {
+      userPaceMs = userPaceMs ? Math.round(userPaceMs * 0.6 + userGap * 0.4) : userGap;
+      logAnalysis('user pace updated: raw=' + (userGap / 1000).toFixed(1) + 's -> ema=' + (userPaceMs / 1000).toFixed(1) + 's');
+    } else {
+      logAnalysis('user tick skipped: lastUserTickAt=' + (lastUserTickAt ? 'set' : '0') + ' gap=' + (userGap / 1000).toFixed(1) + 's');
+    }
+    lastUserTickAt = now;
   }
   lastTickAt = now;
   lastTickTurn = turn || '';
@@ -246,7 +270,7 @@ async function loadSettings() {
   if (stored.sound != null) settings.sound = stored.sound;
   if (stored.classify != null) settings.classify = stored.classify;
   if (stored.geminiPrompt != null) settings.geminiPrompt = stored.geminiPrompt;
-  if (stored.autoTimingMode === 'match' || stored.autoTimingMode === 'random') settings.autoTimingMode = stored.autoTimingMode;
+  if (stored.autoTimingMode === 'match' || stored.autoTimingMode === 'random' || stored.autoTimingMode === 'balance') settings.autoTimingMode = stored.autoTimingMode;
   for (const key of Object.keys(AUTO_DEFAULTS)) {
     const v = parseInt(stored[key], 10);
     if (!isNaN(v) && v > 0) settings[key] = v;
@@ -881,15 +905,42 @@ function legalMovesFromFen(fen) {
 // minus autoBeatByMs (adjusted adaptively by rating) - so analysis time is
 // subtracted, and if the engine already burned past the deadline we fire
 // almost immediately. Clamped to a safe floor so we never answer instantly,
-// capped at two minutes. Until the opponent has been timed - or in 'random'
-// mode - a random baseline window is used, with one move in autoSlowOneIn
-// crossing the slow band instead (0 disables the slow band).
+// capped at two minutes. In 'balance' mode the target is the average of both
+// players' smoothed paces, making the engine match the overall game tempo.
+// Until the opponent has been timed - or in 'random' mode - a random baseline
+// window is used, with one move in autoSlowOneIn crossing the slow band
+// instead (0 disables the slow band).
 function autoPlayDelay() {
   if (settings.autoTimingMode === 'match' && opponentPaceMs > 0 && opponentMovedAtMs > 0) {
     const beat = (settings.autoBeatByMs || 0) + adaptiveParams().beatDeltaMs;
     const target = Math.max(700, Math.min(120000, opponentPaceMs - beat));
     const elapsed = Date.now() - opponentMovedAtMs;
     return Math.max(200, target - elapsed);
+  }
+  if (settings.autoTimingMode === 'balance' && opponentMovedAtMs > 0) {
+    const beat = (settings.autoBeatByMs || 0) + adaptiveParams().beatDeltaMs;
+    // Blend opponent and user pace: if both are known, average them; otherwise
+    // fall back to whichever is available. The average reflects the overall
+    // game tempo so the engine doesn't feel like a different player.
+    let basePace = opponentPaceMs;
+    let paceSource = 'opponent';
+    if (opponentPaceMs > 0 && userPaceMs > 0) {
+      basePace = Math.round((opponentPaceMs + userPaceMs) / 2);
+      paceSource = 'avg(opp,user)';
+    } else if (userPaceMs > 0) {
+      basePace = userPaceMs;
+      paceSource = 'user-only';
+    }
+    if (basePace > 0) {
+      const target = Math.max(700, Math.min(120000, basePace - beat));
+      const elapsed = Date.now() - opponentMovedAtMs;
+      logAnalysis('[balance] source=' + paceSource + ' base=' + (basePace / 1000).toFixed(1) + 's' +
+        ' opp=' + (opponentPaceMs / 1000).toFixed(1) + 's user=' + (userPaceMs / 1000).toFixed(1) + 's' +
+        ' beat=' + beat + 'ms target=' + (target / 1000).toFixed(1) + 's elapsed=' + (elapsed / 1000).toFixed(1) + 's' +
+        ' delay=' + Math.max(200, target - elapsed) + 'ms');
+      return Math.max(200, target - elapsed);
+    }
+    logAnalysis('[balance] no pace data yet, falling back to random');
   }
   const slowOneIn = settings.autoSlowOneIn;
   if (slowOneIn >= 1 && Math.floor(Math.random() * slowOneIn) === 0) {
@@ -944,24 +995,37 @@ async function handleBoardUpdate(fen, senderTabId) {
   if (analysisTimeout) clearTimeout(analysisTimeout);
   analysisTimeout = setTimeout(async function() {
     const t0 = Date.now();
+    logAnalysis('[board-update] pace snapshot: opp=' + (opponentPaceMs / 1000).toFixed(1) + 's you=' + (userPaceMs / 1000).toFixed(1) + 's mode=' + settings.autoTimingMode + ' autoPlay=' + settings.autoPlay);
     try {
       if (fen.split(' ')[0] === START_PLACEMENT) {
         lastTickAt = 0;
         lastTickTurn = '';
         opponentPaceMs = 0;
         opponentMovedAtMs = 0;
+        userPaceMs = 0;
+        lastUserTickAt = 0;
       }
-      // In matched mode, shrink the engine's time budget so the search can
-      // finish inside the reply deadline instead of blowing past it.
+      // In matched or balanced mode, shrink the engine's time budget so the
+      // search can finish inside the reply deadline instead of blowing past it.
       let movetimeMs;
-      if (settings.autoTimingMode === 'match' && settings.autoPlay &&
-          opponentPaceMs > 0 && opponentMovedAtMs > 0) {
+      if ((settings.autoTimingMode === 'match' || settings.autoTimingMode === 'balance') &&
+          settings.autoPlay && opponentMovedAtMs > 0) {
         const beat = (settings.autoBeatByMs || 0) + adaptiveParams().beatDeltaMs;
-        const target = Math.max(700, Math.min(120000, opponentPaceMs - beat));
-        movetimeMs = Math.max(500, Math.min(settings.engineMoveTimeMs,
-          target - (Date.now() - opponentMovedAtMs) - 250));
-        logAnalysis('match budget ' + Math.round(movetimeMs) + 'ms' +
-          ' (target ' + (target / 1000).toFixed(1) + 's)');
+        let basePace = opponentPaceMs;
+        if (settings.autoTimingMode === 'balance') {
+          if (opponentPaceMs > 0 && userPaceMs > 0) {
+            basePace = Math.round((opponentPaceMs + userPaceMs) / 2);
+          } else if (userPaceMs > 0) {
+            basePace = userPaceMs;
+          }
+        }
+        if (basePace > 0) {
+          const target = Math.max(700, Math.min(120000, basePace - beat));
+          movetimeMs = Math.max(500, Math.min(settings.engineMoveTimeMs,
+            target - (Date.now() - opponentMovedAtMs) - 250));
+          logAnalysis(settings.autoTimingMode + ' budget ' + Math.round(movetimeMs) + 'ms' +
+            ' (target ' + (target / 1000).toFixed(1) + 's)');
+        }
       }
       const result = await analyzePosition(fen, { explain: 'async', movetimeMs: movetimeMs });
       logAnalysis(result.fen.split(' ')[0] + ' depth ' + result.engine.depth + ' in ' +
@@ -994,8 +1058,9 @@ async function handleBoardUpdate(fen, senderTabId) {
           uci = deviation.uci;
         }
         logAnalysis('auto-play in ' + (playDelayMs / 1000).toFixed(1) + 's' +
-          ' (' + settings.autoTimingMode + ' mode, pace ~' +
-          (opponentPaceMs / 1000).toFixed(1) + 's, elo ' +
+          ' (' + settings.autoTimingMode + ' mode, opp=' +
+          (opponentPaceMs / 1000).toFixed(1) + 's, you=' +
+          (userPaceMs / 1000).toFixed(1) + 's, elo ' +
           (opponentElo || '?') + ', playing ' + playedRankLabel + ')');
       }
       if (/^[a-h][1-8][a-h][1-8]/.test(uci)) {

@@ -164,16 +164,17 @@
   <div class="section">
     <h2>Auto-play timing</h2>
     <p class="hint" style="margin:0 0 12px;">
-      Humanised think times for auto-played moves. In "Match opponent" mode
-      the extension times how long the opponent thinks and replies just
-      faster, falling back to the random window until they have been timed.
-      Occasionally a quiet position gets an alternative ("normal") move
-      instead of the engine's best.
+      Humanised think times for auto-played moves. "Match opponent" replies just
+      faster than their measured pace. "Balance with both players" averages your
+      pace and the opponent's to match the overall game tempo. "Random window"
+      uses fixed min/max values. Occasionally a quiet position gets an
+      alternative ("normal") move instead of the engine's best.
     </p>
     <div class="row">
       <label>Move timing</label>
       <select id="autoTimingMode">
         <option value="match" selected>Match opponent (1s faster)</option>
+        <option value="balance">Balance with both players</option>
         <option value="random">Random window</option>
       </select>
     </div>

@@ -292,6 +292,8 @@ function sendFenUpdate() {
       // carries the opponent's board rating for adaptive strength.
       if (stm && position.fen !== lastTickFen) {
         lastTickFen = position.fen;
+        const uc = isBlackOrientation(board) ? 'b' : 'w';
+        console.warn('[Chess ext] turn-tick: turn=' + stm + ' you=' + uc + ' fen=' + position.fen.split(' ')[0].substring(0, 20) + '...');
         trySend({
           type: 'turn-tick',
           userColor: userColor,
