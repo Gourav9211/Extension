@@ -47,6 +47,12 @@
     .set.disabled { opacity: .4; pointer-events: none; }
     .set-label { font-size: 13.5px; font-weight: 500; }
     .set-hint { margin-top: 3px; font-size: 12px; line-height: 1.5; color: var(--text-faint); max-width: 52ch; }
+    .set-range {
+      display: inline-block; margin-top: 2px;
+      font: 11px/1 var(--mono); color: var(--text-faint);
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 4px; padding: 2px 6px;
+    }
     .set-control { display: flex; align-items: center; gap: 8px; }
 
     input[type="number"], input[type="text"], input[type="password"], select, textarea {
@@ -192,8 +198,28 @@
     <div class="card">
       <div class="set" data-requires="monitoring">
         <div>
+          <div class="set-label">Analysis engine</div>
+          <div class="set-hint">Stockfish is the classic evaluation engine. "Maia-3 only"
+            turns Stockfish off completely &mdash; the engine is never loaded &mdash; and every
+            line, evaluation and auto-played move comes from the Maia-3 human model instead.</div>
+        </div>
+        <div class="set-control">
+          <select id="engineMode">
+            <option value="stockfish" selected>Stockfish (recommended)</option>
+            <option value="maia">Maia-3 only (no Stockfish)</option>
+          </select>
+        </div>
+      </div>
+      <p class="note" id="engineModeNote" hidden>
+        <strong>Stockfish is off.</strong> Maia now supplies the moves and evaluations, so there is
+        no engine depth, the Maia blunder guard's centipawn scoring is inactive, and Maia must be
+        enabled. Switching back to Stockfish restores the full eval lines and the guard.
+      </p>
+      <div class="set" data-requires="monitoring">
+        <div>
           <div class="set-label">Analysis depth</div>
-          <div class="set-hint">Higher is stronger but slower. 22 is a good balance.</div>
+          <div class="set-hint">Higher is stronger but slower. 22 is a good balance. Ignored in
+            "Maia-3 only" mode, which has no search depth.</div>
         </div>
         <div class="set-control"><input id="depth" type="number" min="10" max="45" value="22"></div>
       </div>
@@ -411,7 +437,8 @@
           <div class="set-label">Blunder guard (&plusmn; cp)</div>
           <div class="set-hint">A weak player hangs pieces. Any Maia move costing more than
             this against Stockfish is rejected and the safest alternative is played
-            instead. 0 disables the guard.</div>
+            instead. 0 disables the guard. In "Maia-3 only" mode there is no Stockfish to
+            score against, so the guard is inactive.</div>
         </div>
         <div class="set-control"><input id="maiaMaxLossCp" type="number" min="0" max="1000" step="10" value="120"></div>
       </div>
@@ -435,7 +462,8 @@
         <div>
           <div class="set-label">Engine lines for the guard</div>
           <div class="set-hint">Extra Stockfish lines searched so Maia's candidates can be
-            scored. Costs a little engine time.</div>
+            scored. Costs a little engine time, and only applies when Stockfish is the
+            active analysis engine.</div>
         </div>
         <div class="set-control"><input id="maiaSearchLines" type="number" min="1" max="10" step="1" value="6"></div>
       </div>

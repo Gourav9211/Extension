@@ -1,5 +1,6 @@
 const $ = (sel) => document.querySelector(sel);
 const DEFAULTS = {
+  engineMode: 'stockfish',
   depth: 22,
   autoPlay: false,
   adaptiveOpponent: true,
@@ -93,6 +94,56 @@ function syncMaiaState() {
   if (el) el.textContent = on ? total + ' settings active' : total + ' settings';
 }
 
+// Maia-only mode shuts Stockfish off. Selecting it implies Maia must be on
+// (there would be nothing else to analyse with), and the two settings that
+// depend on Stockfish scoring are meaningless while it is off.
+function syncEngineMode() {
+  const maiaOnly = $('#engineMode') && $('#engineMode').value === 'maia';
+  const maiaOn = $('#maiaEnabled');
+  if (maiaOnly && maiaOn && !maiaOn.checked) {
+    maiaOn.checked = true;
+    syncMaiaState();
+  }
+  for (const key of ['maiaMaxLossCp', 'maiaSearchLines']) {
+    const el = $('#' + key);
+    if (!el) continue;
+    el.disabled = maiaOnly;
+    const row = el.closest('.set');
+    if (row) row.classList.toggle('disabled', maiaOnly);
+  }
+  const note = $('#engineModeNote');
+  if (note) note.hidden = !maiaOnly;
+}
+
+// Every setting already carries a written explanation in .set-hint; this appends
+// the actual allowed range beneath it, taken from the input's own min/max (or
+// its option list for a dropdown), so the limits never drift from the code.
+function annotateRanges() {
+  for (const row of document.querySelectorAll('.set')) {
+    const ctrl = row.querySelector('input[type="number"], select');
+    const hint = row.querySelector('.set-hint');
+    if (!ctrl || !hint) continue;
+    if (hint.querySelector('.set-range')) continue;
+    let label;
+    if (ctrl instanceof HTMLSelectElement) {
+      label = 'Choices: ' + Array.from(ctrl.options).map(o => o.text).join(' \u00b7 ');
+    } else {
+      const parts = [];
+      if (ctrl.min !== '' && ctrl.min != null) parts.push('min ' + ctrl.min);
+      if (ctrl.max !== '' && ctrl.max != null) parts.push('max ' + ctrl.max);
+      if (ctrl.step !== '' && ctrl.step != null && ctrl.step !== '1') parts.push('step ' + ctrl.step);
+      if (!parts.length) continue;
+      label = 'Range: ' + parts.join(' \u00b7 ');
+    }
+    const span = document.createElement('span');
+    span.className = 'set-range';
+    span.textContent = label;
+    const limitText = document.createElement('div');
+    limitText.appendChild(span);
+    hint.appendChild(limitText);
+  }
+}
+
 function syncAutoplayState() {
   const on = $('#autoPlay') && $('#autoPlay').checked;
   const el = $('#autoplay-count');
@@ -119,9 +170,12 @@ async function loadSettings() {
   applyTheme(stored.darkMode !== false);
   syncMaiaState();
   syncAutoplayState();
+  syncEngineMode();
+  annotateRanges();
   console.log('[options] loaded ' + Object.keys(DEFAULTS).length + ' settings, theme=' +
     (stored.darkMode !== false ? 'dark' : 'light') +
     ', monitoring=' + (stored.monitoring != null ? stored.monitoring : DEFAULTS.monitoring) +
+    ', engine=' + (stored.engineMode != null ? stored.engineMode : DEFAULTS.engineMode) +
     ', gemini=' + (stored.geminiKey ? 'key present' : 'no key'));
 }
 
@@ -140,6 +194,7 @@ async function saveSettings() {
   applyTheme(settings.darkMode !== false);
   syncMaiaState();
   syncAutoplayState();
+  syncEngineMode();
   // Preload the network so the first analysed position is not the one that
   // pays the ~10MB model read. Failure is non-fatal: the panel just appears
   // when it is eventually ready.
@@ -149,7 +204,8 @@ async function saveSettings() {
   }
   setStatus('Saved');
   console.log('[options] saved ' + Object.keys(settings).length + ' settings' +
-    ' (monitoring=' + settings.monitoring + ', autoPlay=' + settings.autoPlay +
+    ' (monitoring=' + settings.monitoring + ', engine=' + settings.engineMode +
+    ', autoPlay=' + settings.autoPlay +
     ', maia=' + (settings.maiaEnabled ? settings.maiaModel : 'off') + ')');
 }
 
@@ -238,7 +294,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     el.addEventListener('change', () => {
       syncMaiaState();
       syncAutoplayState();
+      syncEngineMode();
       syncDependencies();
+    });
+  }
+
+  const engineModeEl = $('#engineMode');
+  if (engineModeEl) {
+    engineModeEl.addEventListener('change', () => {
+      syncEngineMode();
+      syncMaiaState();
+      syncAutoplayState();
     });
   }
 

@@ -67,6 +67,11 @@ function clampElo(value) {
 // the per-line scores are dominated by move ordering, not by position quality.
 const MAIA_GUARD_MIN_DEPTH = 8;
 const MAIA_DEFAULTS = {
+  // Which engine analysis uses. 'stockfish' is the classic eval engine;
+  // 'maia' turns Stockfish off entirely and reports Maia-3's human-move
+  // distribution as the line, so the whole pipeline (popup, auto-play,
+  // explanations) runs on Maia alone.
+  engineMode: 'stockfish',
   maiaEnabled: false,
   maiaModel: '5m',
   maiaElo: 1500,
@@ -327,6 +332,7 @@ async function loadSettings() {
   if (stored.classify != null) settings.classify = stored.classify;
   if (stored.geminiPrompt != null) settings.geminiPrompt = stored.geminiPrompt;
   if (stored.autoTimingMode === 'match' || stored.autoTimingMode === 'random' || stored.autoTimingMode === 'balance') settings.autoTimingMode = stored.autoTimingMode;
+  settings.engineMode = stored.engineMode === 'maia' ? 'maia' : 'stockfish';
   for (const key of Object.keys(AUTO_DEFAULTS)) {
     const v = parseInt(stored[key], 10);
     if (!isNaN(v) && v > 0) settings[key] = v;
@@ -340,6 +346,7 @@ async function loadSettings() {
     ' monitoring=' + settings.monitoring + ' maia=' + (settings.maiaEnabled ? settings.maiaModel +
     ' elo ' + settings.maiaElo + ' vs ' + settings.maiaOpponentElo : 'off') +
     ' gemini=' + (stored[GEMINI_KEY] ? 'key present' : 'no key') +
+    ' engine=' + settings.engineMode +
     ' update=' + (stored.autoPlay ? 'on (' + settings.autoTimingMode + ')' : 'off'));
 }
 
@@ -699,6 +706,24 @@ function chooseMaiaMove(maia, engine, fen, legal) {
   return { uci: move.uci, prob: move.prob, fromMaia: true, reason: 'maia' };
 }
 
+// Builds the engine-shaped result Maia-only mode needs. The top legal Maia
+// pick becomes the headline "best move" (its own probability ranking, with
+// Maia's own centipawn evaluation as the score), so the popup, auto-play,
+// classification, history and explanations all keep working with no Stockfish
+// involvement at all. Evaluation is Maia's self-score, not an engine search.
+function maiaToEngine(maia, fen) {
+  const list = (maia.moves || []);
+  const count = Math.max(1, Math.min(5, list.length));
+  const moves = list.slice(0, count).map(function(m, i) {
+    return {
+      move: m.uci, uci: m.uci, line: m.uci,
+      evaluation: typeof m.scoreCp === 'number' ? m.scoreCp : (i === 0 ? maia.scoreCp : null),
+      mate: null, depth: null, probability: m.prob
+    };
+  });
+  return { moves: moves, depth: null, fen: fen, tablebase: false, source: 'maia' };
+}
+
 function processEngineLine(text) {
   if (/^info string/.test(text)) {
     logEngine(text.replace(/^info string\s*/, ''));
@@ -819,59 +844,64 @@ async function explainWithGemini(fen, engine) {
 async function analyzePosition(fen, opts) {
   const explainMode = (opts && opts.explain) || 'await';
   await loadSettings();
+  const maiaOnly = settings.engineMode === 'maia';
   await ensureOffscreen();
-  logEngine('waiting for engine (ready=' + engineReady + ')...');
-  await waitForEngine(30000);
-  logEngine('engine ready, analyzing');
+  if (!maiaOnly) {
+    // Ask the offscreen document to boot Stockfish if it wasn't started (e.g.
+    // it came up during a Maia-only session), then wait for uciok.
+    chrome.runtime.sendMessage({ type: 'sf-ensure' }).catch(function() {});
+    logEngine('waiting for engine (ready=' + engineReady + ')...');
+    await waitForEngine(30000);
+    logEngine('engine ready, analyzing');
+  } else {
+    logEngine('Maia-only mode: Stockfish engine stays off');
+  }
   const validated = validateFen(fen);
   const pieceCount = countPieces(validated);
 
-  let engine;
+  let engine = null;
   let opening = detectOpening(validated);
   let classification = null;
+  let wantMaia = false;
 
-  // Tablebase lines carry no centipawn evaluation, so the Maia blunder guard
-  // cannot score anything there; Maia is still shown, just never auto-played.
-  if (pieceCount <= 7) {
-    const tb = await queryTablebase(validated);
-    if (tb) {
-      engine = {
-        moves: tb.moves.map(function(m) {
-          return { move: m.move, line: m.uci, evaluation: null, mate: m.dtm, depth: null, tablebase: m.category };
-        }),
-        depth: 100, fen: validated, tablebase: true, category: tb.category
-      };
+  if (!maiaOnly) {
+    wantMaia = settings.maiaEnabled && !engine;
+    // Tablebase lines carry no centipawn evaluation, so the Maia blunder guard
+    // cannot score anything there; Maia is still shown, just never auto-played.
+    if (pieceCount <= 7) {
+      const tb = await queryTablebase(validated);
+      if (tb) {
+        engine = {
+          moves: tb.moves.map(function(m) {
+            return { move: m.move, line: m.uci, evaluation: null, mate: m.dtm, depth: null, tablebase: m.category };
+          }),
+          depth: 100, fen: validated, tablebase: true, category: tb.category
+        };
+      }
     }
   }
 
   // The guard needs more than the displayed lines to judge Maia's candidates.
-  const wantMaia = settings.maiaEnabled && !engine;
   const lines = wantMaia && settings.maiaAutoPlay && settings.autoPlay
     ? Math.max(settings.multiPv, settings.maiaSearchLines)
     : settings.multiPv;
 
-  if (!engine) {
+  if (!engine && !maiaOnly) {
     const cached = getCached(validated);
     engine = cached || await evaluateWithStockfish(validated, lines, opts && opts.movetimeMs);
     if (!cached) setCache(validated, engine);
   }
 
-  if (lastEval != null && settings.classify) {
-    const currCp = engine.moves[0].evaluation;
-    const isMate = engine.moves[0].mate != null;
-    classification = classifyMove(lastEval, currCp, isMate);
-  }
-  const currCp = engine.moves[0].evaluation;
-  if (currCp != null) lastEval = currCp;
-
   // Maia runs after the engine line so the guard can use it as the yardstick.
-  // Needed whenever the popup shows it OR auto-play will play it.
+  // Needed whenever Maia is the engine itself OR the popup shows it OR
+  // auto-play will play it.
+  const wantMaiaPick = maiaOnly || settings.maiaShow || (settings.autoPlay && settings.maiaAutoPlay);
   let maia = null;
-  if (settings.maiaEnabled && (settings.maiaShow || (settings.autoPlay && settings.maiaAutoPlay))) {
+  if (settings.maiaEnabled && wantMaiaPick) {
     const legal = legalMovesFromFen(validated);
     const raw = await maiaPredict(validated, legal, { limit: 6 });
     if (raw) {
-      maia = Object.assign({}, raw, { selection: chooseMaiaMove(raw, engine, validated, legal) });
+      maia = Object.assign({}, raw, { selection: maiaOnly ? null : chooseMaiaMove(raw, engine, validated, legal) });
       console.log('[maia] ' + validated.split(' ')[0].substring(0, 16) + ' -> ' +
         (maia.moves[0] ? maia.moves[0].uci + ' ' + Math.round(maia.moves[0].prob * 100) + '%' : 'n/a') +
         (maia.selection && maia.selection.uci ? ' play=' + maia.selection.uci + ' (' + maia.selection.reason + ')' : ''));
@@ -879,6 +909,23 @@ async function analyzePosition(fen, opts) {
       console.warn('[maia] prediction unavailable for ' + validated.split(' ')[0].substring(0, 16));
     }
   }
+
+  // In Maia-only mode Maia IS the engine: the top legal move it picked becomes
+  // the headline line, so every consumer (popup, auto-play, explanations,
+  // history) works unchanged with the whole pipeline off Stockfish.
+  if (maiaOnly) {
+    if (!maia) {
+      return { ok: false, error: 'Maia is off or failed to load, and this analyse engine needs it. Turn Maia on, or switch the analysis engine back to Stockfish.' };
+    }
+    engine = maiaToEngine(maia, validated);
+  }
+
+  if (lastEval != null && settings.classify) {
+    const currCp = engine.moves[0].evaluation;
+    const isMate = engine.moves[0].mate != null;
+    classification = classifyMove(lastEval, currCp, isMate);
+  }
+  if (engine.moves[0].evaluation != null) lastEval = engine.moves[0].evaluation;
 
   // In 'async' mode the caller wants the engine result immediately and will
   // fetch the Gemini explanation separately - the arrow must not wait on a
@@ -890,7 +937,7 @@ async function analyzePosition(fen, opts) {
   }
 
   gameHistory.push({
-    fen: validated, bestMove: engine.moves[0].move, eval: currCp,
+    fen: validated, bestMove: engine.moves[0].move, eval: engine.moves[0].evaluation,
     timestamp: Date.now(), classification: classification
   });
   if (gameHistory.length > 200) gameHistory = gameHistory.slice(-200);
@@ -1313,7 +1360,10 @@ async function handleBoardUpdate(fen, senderTabId) {
         }
       }
       const result = await analyzePosition(fen, { explain: 'async', movetimeMs: movetimeMs });
-      logAnalysis(result.fen.split(' ')[0] + ' depth ' + result.engine.depth + ' in ' +
+      const depthText = result.engine.source === 'maia'
+        ? 'MAIA'
+        : (result.engine.depth == null ? '?' : result.engine.depth);
+      logAnalysis(result.fen.split(' ')[0] + ' depth ' + depthText + ' in ' +
         ((Date.now() - t0) / 1000).toFixed(1) + 's' +
         (result.engine.tablebase ? ' (tablebase)' : ' (budget ' + settings.engineMoveTimeMs + 'ms, cap depth ' + settings.depth + ')'));
       sendAnalysisToPopup(result);

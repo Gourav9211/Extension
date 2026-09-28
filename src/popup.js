@@ -365,12 +365,15 @@ function renderAnalysis(analysis) {
   renderMaia(analysis.maia);
   setExplanation(analysis.explanation);
 
-  const depth = analysis.engine.depth === 100 ? 'TB' : analysis.engine.depth || '?';
+  const maiaOnly = analysis.engine.source === 'maia';
+  const depth = maiaOnly ? 'MAIA' : (analysis.engine.depth === 100 ? 'TB' : analysis.engine.depth || '?');
   depthBadge.textContent = 'd' + depth;
   const topMove = analysis.engine.moves[0];
-  engineEl.textContent = analysis.tablebase
-    ? 'Tablebase verdict'
-    : (topMove.line ? topMove.line.split(' ').slice(0, 6).join(' ') : 'depth ' + depth);
+  engineEl.textContent = maiaOnly
+    ? 'Maia pick \u2014 ' + topMove.move + ' (no Stockfish)'
+    : analysis.tablebase
+      ? 'Tablebase verdict'
+      : (topMove.line ? topMove.line.split(' ').slice(0, 6).join(' ') : 'depth ' + depth);
 
   if (analysis.opening) {
     openingBanner.hidden = false;

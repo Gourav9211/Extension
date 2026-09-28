@@ -7,6 +7,7 @@ A Chrome Manifest V3 extension that analyzes Chess.com positions in real time us
 - Real-time board monitoring on chess.com pages
 - Local Stockfish analysis (MultiPV, configurable depth) — no server needed
 - Optional local **Maia-3** network (any rating, 100–3000) that plays like a human of that strength instead of always picking the best move
+- **Maia-only mode**: run the whole extension off Stockfish — every line, evaluation and auto-played move comes from the Maia-3 human model, and the engine is never loaded
 - Lichess tablebase lookup for positions with ≤ 7 pieces
 - Best-move arrow drawn on the board + move classifications (!!, ?, ??)
 - Win-probability graph and move history with accuracy estimate in the popup
@@ -31,6 +32,9 @@ A Chrome Manifest V3 extension that analyzes Chess.com positions in real time us
 Open the popup → **Settings** (or right-click the extension icon → Options):
 
 - Analysis depth and MultiPV lines
+- Analysis engine: **Stockfish** or **Maia-3 only**. Choosing Maia-only turns the
+  engine off completely; every setting row also shows its explanation and the
+  allowed min/max range
 - UI toggles: sound, dark mode, coordinates, graph, history, classifications
 - Gemini API key + optional custom prompt for plain-language explanations
 - Maia: master switch, player and opponent strength (Elo), model size, use for
@@ -53,6 +57,7 @@ Settings live in the **Maia** section of the options page:
 
 | Setting | Meaning |
 | --- | --- |
+| Analysis engine (Engine section) | `Stockfish` (default) or `Maia-3 only`. Maia-only reports Maia's own top move and evaluation as the line and never loads the engine, so there is no depth and the blunder guard is inactive. |
 | Enable Maia | Master switch. When off, nothing is loaded. |
 | Player strength (Elo) | Strength of the player being modelled, 100–3000. |
 | Opponent strength (Elo) | Strength of the opponent, 100–3000. Leave at `0` to assume an equally strong opponent. |

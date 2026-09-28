@@ -99,7 +99,11 @@ function startEngine() {
   chrome.runtime.sendMessage({ type: 'sf-engine-loaded' }).catch(function() {});
 }
 
-startEngine();
+// Stockfish does NOT boot automatically anymore. The service worker decides
+// when it is wanted: analysis sends 'sf-ensure' whenever the analyse engine is
+// Stockfish, so in Maia-only mode the engine is never even loaded. Keeping the
+// decision on the SW side avoids a storage round-trip in this document's boot
+// path.
 
 // ---- Maia (human-move model) ----
 // Maia runs as its own worker so onnxruntime-web's WebAssembly work never
@@ -187,6 +191,13 @@ function askMaia(message) {
 }
 
 chrome.runtime.onMessage.addListener(function(message, _sender, sendResponse) {
+  if (message.type === 'sf-ensure') {
+    // Analyse position has decided Stockfish is wanted; start it if the boot
+    // check skipped it (Maia-only was on). startEngine is idempotent.
+    startEngine();
+    sendResponse({ ok: true, started: !!engine });
+    return true;
+  }
   if (message.type === 'sf-cmd') {
     try {
       startEngine();
