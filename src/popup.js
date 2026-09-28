@@ -1,51 +1,66 @@
-const statusText = document.querySelector('#status-text');
-const statusDot = document.querySelector('#status-bar .dot');
-const result = document.querySelector('#result');
-const noGame = document.querySelector('#no-game');
-const moveEl = document.querySelector('#move');
-const engineEl = document.querySelector('#engine');
-const explanationEl = document.querySelector('#explanation');
-const explanationSection = document.querySelector('#explanation-section');
+const $ = (s) => document.querySelector(s);
 
-function setExplanation(text) {
-  explanationEl.textContent = text || '';
-  explanationSection.hidden = !text;
-}
-const altMovesEl = document.querySelector('#alt-moves');
-const maiaSection = document.querySelector('#maia-section');
-const maiaEloEl = document.querySelector('#maia-elo');
-const maiaEvalEl = document.querySelector('#maia-eval');
-const maiaMovesEl = document.querySelector('#maia-moves');
-const maiaNoteEl = document.querySelector('#maia-note');
-const evalContainer = document.querySelector('#eval-container');
-const evalFill = document.querySelector('#eval-fill');
-const evalLabel = document.querySelector('#eval-label');
-const openingBanner = document.querySelector('#opening-banner');
-const openingName = document.querySelector('#opening-name');
-const darkToggle = document.querySelector('#dark-toggle');
-const graphSection = document.querySelector('#graph-section');
-const graphCanvas = document.querySelector('#eval-graph');
-const historySection = document.querySelector('#history-section');
-const moveHistory = document.querySelector('#move-history');
-const accuracyBadge = document.querySelector('#accuracy-badge');
-const classifyBanner = document.querySelector('#classification-banner');
-const classifyIcon = document.querySelector('#classify-icon');
-const classifyText = document.querySelector('#classify-text');
-const updateBanner = document.querySelector('#update-banner');
-const updateText = document.querySelector('#update-text');
-const updateLink = document.querySelector('#update-link');
-const versionText = document.querySelector('#version-text');
-const updateStatusText = document.querySelector('#update-status-text');
-const checkUpdateBtn = document.querySelector('#check-update');
+const statusBar = $('#status-bar');
+const statusText = $('#status-text');
+const result = $('#result');
+const noGame = $('#no-game');
+const moveEl = $('#move');
+const engineEl = $('#engine');
+const evalNumEl = $('#eval-num');
+const evalSideEl = $('#eval-side');
+const depthBadge = $('#depth-badge');
+const explanationEl = $('#explanation');
+const explanationSection = $('#explanation-section');
+const altMovesEl = $('#alt-moves');
+const maiaSection = $('#maia-section');
+const maiaEloEl = $('#maia-elo');
+const maiaEvalEl = $('#maia-eval');
+const maiaMovesEl = $('#maia-moves');
+const maiaNoteEl = $('#maia-note');
+const evalContainer = $('#eval-container');
+const evalFill = $('#eval-fill');
+const openingBanner = $('#opening-banner');
+const openingName = $('#opening-name');
+const darkToggle = $('#dark-toggle');
+const toggleAnalysisBtn = $('#toggle-analysis');
+const graphSection = $('#graph-section');
+const graphCanvas = $('#eval-graph');
+const historySection = $('#history-section');
+const moveHistory = $('#move-history');
+const accuracyBadge = $('#accuracy-badge');
+const classifyBanner = $('#classification-banner');
+const classifyIcon = $('#classify-icon');
+const classifyText = $('#classify-text');
+const updateBanner = $('#update-banner');
+const updateText = $('#update-text');
+const updateLink = $('#update-link');
+const versionText = $('#version-text');
+const updateStatusText = $('#update-status-text');
+const checkUpdateBtn = $('#check-update');
+const skeleton = $('#skeleton');
 
 let audioCtx = null;
 let evalHistory = [];
 let analyzingTimer = null;
+let monitoring = false;
 let settings = { sound: true, coords: true, graph: true, history: true, classify: true };
 
-function setStatus(text, active) {
+// Classification colours. Defined once so the banner and the history rows
+// cannot drift apart.
+const CLASSES = {
+  brilliant: { sym: '!!', color: '#4ade80' },
+  good: { sym: '!', color: '#86efac' },
+  inaccuracy: { sym: '?!', color: '#f0b45e' },
+  mistake: { sym: '?', color: '#fb923c' },
+  blunder: { sym: '??', color: '#f87171' }
+};
+
+function setStatus(text, mode) {
   statusText.textContent = text;
-  statusDot.classList.toggle('active', !!active);
+  statusBar.classList.toggle('live', mode === 'live');
+  statusBar.classList.toggle('busy', mode === 'busy');
+  statusBar.classList.toggle('err', mode === 'err');
+  skeleton.hidden = mode !== 'busy';
 }
 
 // Never leave "Analyzing..." hanging: if no result lands within 45s the
@@ -53,7 +68,7 @@ function setStatus(text, active) {
 function armAnalyzingWatchdog() {
   clearTimeout(analyzingTimer);
   analyzingTimer = setTimeout(function() {
-    setStatus('Still analyzing... engine slow or stuck', true);
+    setStatus('Still analysing - engine slow or stuck', 'busy');
   }, 45000);
 }
 
@@ -93,12 +108,12 @@ function renderEval(engine) {
   const cp = evalToCp(engine);
   if (cp == null) return;
   evalContainer.hidden = false;
-  const pawns = (cp / 100).toFixed(1);
-  evalLabel.textContent = pawns > 0 ? '+' + pawns : pawns;
-  const pct = 50 + (cp / 100) * 5;
-  const clamped = Math.max(2, Math.min(98, pct));
-  evalFill.style.height = clamped + '%';
-  evalFill.style.background = clamped > 52 ? '#fffdf7' : clamped < 48 ? '#1d2824' : '#888';
+  // Map centipawns to a 0-100 bar. The scale saturates at +/-8 pawns so a
+  // winning position is not permanently pinned to the right edge, and the
+  // midpoint stays exactly 50 at equality.
+  const pct = Math.max(2, Math.min(98, 50 + (cp / 800) * 50));
+  evalFill.style.width = pct + '%';
+  evalFill.classList.toggle('white', cp > 0);
 }
 
 function formatEvalShort(m) {
@@ -110,25 +125,40 @@ function formatEvalShort(m) {
   return '';
 }
 
+// Pawn-equivalent score for the headline number, mate-aware.
+function headlineEval(topMove) {
+  if (topMove.mate != null) return { text: 'M' + topMove.mate, side: topMove.mate > 0 ? 'white' : 'black' };
+  if (topMove.evaluation != null) {
+    const p = topMove.evaluation / 100;
+    return { text: (p > 0 ? '+' : '') + p.toFixed(1), side: p > 0 ? 'white' : p < 0 ? 'black' : 'even' };
+  }
+  return { text: '--', side: 'even' };
+}
+
 function renderMoves(engine) {
-  moveEl.textContent = engine.moves[0].move;
+  const top = engine.moves[0];
+  moveEl.textContent = top.move;
+  const ev = headlineEval(top);
+  evalNumEl.textContent = ev.text;
+  evalSideEl.textContent = ev.side;
+  evalNumEl.classList.toggle('white', ev.side === 'white');
+  evalNumEl.classList.toggle('black', ev.side === 'black');
+
   altMovesEl.innerHTML = '';
-  const ordinals = ['2nd best', '3rd best'];
+  const ordinals = ['2nd', '3rd', '4th', '5th'];
   engine.moves.slice(1).forEach(function(m, i) {
     const row = document.createElement('div');
-    row.className = 'alt-row';
+    row.className = 'alt';
     const rank = document.createElement('span');
     rank.className = 'alt-rank';
-    rank.textContent = ordinals[i] || ((i + 2) + 'th best');
+    rank.textContent = ordinals[i] || ((i + 2) + 'th');
     const move = document.createElement('span');
     move.className = 'alt-move';
     move.textContent = m.move;
     const evalEl = document.createElement('span');
     evalEl.className = 'alt-eval';
     evalEl.textContent = formatEvalShort(m);
-    row.appendChild(rank);
-    row.appendChild(move);
-    row.appendChild(evalEl);
+    row.append(rank, move, evalEl);
     altMovesEl.appendChild(row);
   });
 }
@@ -147,15 +177,16 @@ function renderMaia(maia) {
   // ignoring a setting the options page exposes.
   maiaEloEl.textContent = maia.opponentElo && maia.opponentElo !== maia.elo
     ? maia.elo + ' vs ' + maia.opponentElo
-    : maia.elo;
+    : String(maia.elo);
 
   const wdl = maia.wdl || [0, 0, 0];
   const win = Math.round((wdl[2] || 0) * 100);
   const loss = Math.round((wdl[0] || 0) * 100);
-  maiaEvalEl.textContent = win + '% / ' + loss + '% win-loss';
   if (typeof maia.scoreCp === 'number') {
     const pawns = (maia.scoreCp / 100).toFixed(1);
-    maiaEvalEl.textContent = (pawns > 0 ? '+' : '') + pawns + ' \u00b7 ' + win + '/' + loss + ' w/l';
+    maiaEvalEl.textContent = (pawns > 0 ? '+' : '') + pawns + '  \u00b7  ' + win + '/' + loss + ' w/l';
+  } else {
+    maiaEvalEl.textContent = win + '/' + loss + ' w/l';
   }
 
   maiaMovesEl.innerHTML = '';
@@ -164,35 +195,40 @@ function renderMaia(maia) {
   const top = maia.moves[0].prob || 0;
   maia.moves.slice(0, 5).forEach(function(m) {
     const row = document.createElement('div');
-    row.className = 'maia-row';
-    if (playedKey && m.uci.substring(0, 4) === playedKey) row.classList.add('played');
+    row.className = 'maia-bar';
+    if (playedKey && m.uci.substring(0, 4) === playedKey) row.classList.add('picked');
     const move = document.createElement('span');
     move.className = 'maia-move';
     move.textContent = m.uci;
     const track = document.createElement('div');
-    track.className = 'maia-prob-track';
+    track.className = 'maia-track';
     const fill = document.createElement('div');
-    fill.className = 'maia-prob-fill';
+    fill.className = 'maia-fill';
     // Scale against Maia's own best move so the bars stay readable even when
     // every candidate is improbable.
     fill.style.width = (top > 0 ? Math.max(4, (m.prob / top) * 100) : 4) + '%';
     track.appendChild(fill);
     const num = document.createElement('span');
-    num.className = 'maia-prob-num';
+    num.className = 'maia-pct';
     num.textContent = Math.round((m.prob || 0) * 100) + '%';
-    row.appendChild(move);
-    row.appendChild(track);
-    row.appendChild(num);
+    row.append(move, track, num);
     maiaMovesEl.appendChild(row);
   });
 
+  maiaNoteEl.classList.remove('guarded');
   if (selection && selection.fromMaia) {
     maiaNoteEl.textContent = 'Would play ' + selection.uci + '.';
   } else if (selection && selection.reason === 'guarded') {
     maiaNoteEl.textContent = 'Every move Maia wanted was too losing for the blunder guard, so Stockfish moves instead.';
+    maiaNoteEl.classList.add('guarded');
   } else {
     maiaNoteEl.textContent = '';
   }
+}
+
+function setExplanation(text) {
+  explanationEl.textContent = text || '';
+  explanationSection.hidden = !text;
 }
 
 function renderClassification(cls) {
@@ -201,12 +237,10 @@ function renderClassification(cls) {
     return;
   }
   classifyBanner.hidden = false;
-  const labels = { brilliant: '!!', good: '!', inaccuracy: '?!', mistake: '?', blunder: '??' };
-  const colors = { brilliant: '#2ecc71', good: '#27ae60', inaccuracy: '#f39c12', mistake: '#e74c3c', blunder: '#c0392b' };
-  classifyIcon.textContent = labels[cls] || '';
-  classifyIcon.style.color = colors[cls] || '#999';
+  const c = CLASSES[cls];
+  classifyIcon.textContent = c ? c.sym : '';
   classifyText.textContent = cls.charAt(0).toUpperCase() + cls.slice(1);
-  classifyText.style.color = colors[cls] || '#999';
+  classifyBanner.style.color = c ? c.color : '';
 }
 
 function renderGraph(evals) {
@@ -216,41 +250,46 @@ function renderGraph(evals) {
   }
   graphSection.hidden = false;
   const ctx = graphCanvas.getContext('2d');
-  const w = graphCanvas.width;
-  const h = graphCanvas.height;
-  ctx.clearRect(0, 0, w, h);
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = graphCanvas.clientWidth || 360;
+  const cssH = 54;
+  // Size the backing store to device pixels so the line is not blurry on
+  // HiDPI displays, then scale so all drawing stays in CSS pixels.
+  graphCanvas.width = Math.round(cssW * dpr);
+  graphCanvas.height = Math.round(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
 
-  const validEvals = evals.map(function(e) {
-    if (e == null) return 0;
-    return Math.max(-1000, Math.min(1000, e));
-  });
+  const valid = evals.map(e => (e == null ? 0 : Math.max(-1000, Math.min(1000, e))));
+  const x = (i) => (i / (valid.length - 1)) * cssW;
+  const y = (v) => cssH / 2 - (v / 1000) * (cssH / 2 - 2);
 
-  ctx.fillStyle = '#e8e4db';
-  ctx.fillRect(0, 0, w, h);
+  // Area fill first, so the stroke lands on top of it.
+  ctx.beginPath();
+  ctx.moveTo(0, cssH / 2);
+  for (let i = 0; i < valid.length; i++) ctx.lineTo(x(i), y(valid[i]));
+  ctx.lineTo(cssW, cssH / 2);
+  ctx.closePath();
+  const lead = valid[valid.length - 1];
+  const g = ctx.createLinearGradient(0, 0, 0, cssH);
+  if (lead >= 0) { g.addColorStop(0, '#4ade8033'); g.addColorStop(1, '#4ade8000'); }
+  else { g.addColorStop(0, '#f8717100'); g.addColorStop(1, '#f8717133'); }
+  ctx.fillStyle = g;
+  ctx.fill();
 
   ctx.beginPath();
-  ctx.moveTo(0, h / 2);
-  for (let i = 0; i < validEvals.length; i++) {
-    const x = (i / (validEvals.length - 1)) * w;
-    const y = h / 2 - (validEvals[i] / 1000) * (h / 2);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+  for (let i = 0; i < valid.length; i++) {
+    if (i === 0) ctx.moveTo(x(i), y(valid[i])); else ctx.lineTo(x(i), y(valid[i]));
   }
-  ctx.strokeStyle = '#263d32';
+  ctx.strokeStyle = lead >= 0 ? '#4ade80' : '#f87171';
   ctx.lineWidth = 1.5;
+  ctx.lineJoin = 'round';
   ctx.stroke();
 
+  // Marker on the latest point, so the current state is unambiguous.
   ctx.beginPath();
-  ctx.moveTo(0, h / 2);
-  for (let i = 0; i < validEvals.length; i++) {
-    const x = (i / (validEvals.length - 1)) * w;
-    const y = h / 2 - (validEvals[i] / 1000) * (h / 2);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.lineTo(w, h / 2);
-  ctx.lineTo(0, h / 2);
-  ctx.fillStyle = validEvals[validEvals.length - 1] > 0 ? 'rgba(38,61,50,0.15)' : 'rgba(192,57,43,0.15)';
+  ctx.arc(x(valid.length - 1), y(lead), 2.5, 0, Math.PI * 2);
+  ctx.fillStyle = lead >= 0 ? '#4ade80' : '#f87171';
   ctx.fill();
 }
 
@@ -265,28 +304,26 @@ function renderMoveHistory(history) {
   for (let i = 0; i < last20.length; i++) {
     const entry = last20[i];
     const div = document.createElement('div');
-    div.className = 'history-entry';
-    const num = (i + 1) + '. ';
+    div.className = 'hist-row';
+    const num = document.createElement('span');
+    num.className = 'hist-n';
+    num.textContent = (i + 1) + '.';
     const moveSpan = document.createElement('span');
-    moveSpan.className = 'history-move';
-    moveSpan.textContent = num + entry.bestMove;
+    moveSpan.textContent = entry.bestMove;
     const evalSpan = document.createElement('span');
-    evalSpan.className = 'history-eval';
+    evalSpan.className = 'hist-e';
     if (entry.eval != null) {
       const pawns = (entry.eval / 100).toFixed(1);
       evalSpan.textContent = (pawns > 0 ? '+' : '') + pawns;
     }
     const clsSpan = document.createElement('span');
-    clsSpan.className = 'history-cls';
-    if (entry.classification) {
-      const labels = { brilliant: '!!', good: '!', inaccuracy: '?!', mistake: '?', blunder: '??' };
-      clsSpan.textContent = labels[entry.classification] || '';
-      const colors = { brilliant: '#2ecc71', good: '#27ae60', inaccuracy: '#f39c12', mistake: '#e74c3c', blunder: '#c0392b' };
-      clsSpan.style.color = colors[entry.classification] || '#999';
+    clsSpan.className = 'hist-c';
+    const c = CLASSES[entry.classification];
+    if (c) {
+      clsSpan.textContent = c.sym;
+      clsSpan.style.color = c.color;
     }
-    div.appendChild(moveSpan);
-    div.appendChild(evalSpan);
-    div.appendChild(clsSpan);
+    div.append(num, moveSpan, evalSpan, clsSpan);
     moveHistory.appendChild(div);
   }
   moveHistory.scrollTop = moveHistory.scrollHeight;
@@ -314,7 +351,7 @@ function renderAccuracy(history) {
     return;
   }
   accuracyBadge.hidden = false;
-  accuracyBadge.textContent = 'Accuracy: ' + Math.round(acc) + '%';
+  accuracyBadge.textContent = Math.round(acc) + '% acc';
 }
 
 function renderAnalysis(analysis) {
@@ -322,18 +359,14 @@ function renderAnalysis(analysis) {
   renderEval(analysis.engine);
   renderClassification(analysis.classification);
   renderMaia(analysis.maia);
+  setExplanation(analysis.explanation);
 
   const depth = analysis.engine.depth === 100 ? 'TB' : analysis.engine.depth || '?';
+  depthBadge.textContent = 'd' + depth;
   const topMove = analysis.engine.moves[0];
-  let eval_;
-  if (analysis.tablebase) {
-    eval_ = topMove.mate != null ? 'M' + topMove.mate : (topMove.category || '?');
-  } else {
-    eval_ = topMove.evaluation != null ? (topMove.evaluation / 100).toFixed(1) :
-      topMove.mate != null ? 'M' + topMove.mate : '?';
-  }
-  engineEl.textContent = 'Depth ' + depth + ' \u00b7 Eval ' + eval_ + (analysis.tablebase ? ' (tablebase)' : '');
-  setExplanation(analysis.explanation);
+  engineEl.textContent = analysis.tablebase
+    ? 'Tablebase verdict'
+    : (topMove.line ? topMove.line.split(' ').slice(0, 6).join(' ') : 'depth ' + depth);
 
   if (analysis.opening) {
     openingBanner.hidden = false;
@@ -342,7 +375,7 @@ function renderAnalysis(analysis) {
 
   result.hidden = false;
   noGame.hidden = true;
-  setStatus('Your turn \u2014 play the move', true);
+  setStatus('Your turn', 'live');
   playNotifSound();
 
   evalHistory.push(evalToCp(analysis.engine));
@@ -359,6 +392,26 @@ async function refreshHistory() {
   } catch (e) {}
 }
 
+function clearResultPanels() {
+  result.hidden = true;
+  evalContainer.hidden = true;
+  openingBanner.hidden = true;
+  classifyBanner.hidden = true;
+  maiaSection.hidden = true;
+  explanationSection.hidden = true;
+  graphSection.hidden = true;
+  historySection.hidden = true;
+  evalHistory = [];
+}
+
+function setMonitoringUI(on) {
+  monitoring = !!on;
+  toggleAnalysisBtn.setAttribute('aria-pressed', String(monitoring));
+  toggleAnalysisBtn.title = monitoring
+    ? 'Pause analysis (Ctrl+Shift+A)'
+    : 'Resume analysis (Ctrl+Shift+A)';
+}
+
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === 'analysis-result') {
     clearTimeout(analyzingTimer);
@@ -366,23 +419,20 @@ chrome.runtime.onMessage.addListener((message) => {
       renderAnalysis(message);
       refreshHistory();
     } else {
-      setStatus(message.error || 'Analysis failed');
+      setStatus(message.error || 'Analysis failed', 'err');
     }
   }
   if (message.type === 'analysis-explanation') {
     setExplanation(message.explanation);
   }
   if (message.type === 'monitoring-toggled') {
+    setMonitoringUI(message.monitoring);
     if (message.monitoring) {
-      setStatus('Monitoring active', true);
+      setStatus('Monitoring active', 'live');
     } else {
-      setStatus('Monitoring paused');
-      result.hidden = true;
+      setStatus('Analysis paused');
+      clearResultPanels();
       noGame.hidden = false;
-      evalContainer.hidden = true;
-      openingBanner.hidden = true;
-      classifyBanner.hidden = true;
-      maiaSection.hidden = true;
     }
   }
 });
@@ -390,7 +440,7 @@ chrome.runtime.onMessage.addListener((message) => {
 function applyUpdateStatus(status) {
   if (status && status.updateAvailable && status.releaseUrl) {
     updateBanner.hidden = false;
-    updateText.textContent = 'Version ' + status.latestVersion + ' available';
+    updateText.textContent = 'v' + status.latestVersion + ' available';
     updateLink.href = status.releaseUrl;
   } else {
     updateBanner.hidden = true;
@@ -401,7 +451,7 @@ function applyUpdateStatus(status) {
 async function refreshUpdateStatus(force) {
   const originalLabel = checkUpdateBtn.textContent;
   checkUpdateBtn.disabled = true;
-  checkUpdateBtn.textContent = 'Checking...';
+  checkUpdateBtn.textContent = '...';
   updateStatusText.textContent = '';
   try {
     const resp = await chrome.runtime.sendMessage({ type: 'check-update', force: !!force });
@@ -422,6 +472,14 @@ async function refreshUpdateStatus(force) {
 
 async function init() {
   await loadSettings();
+
+  // The master switch lives in the service worker, so ask rather than guess:
+  // reading storage directly here would race the worker's own load.
+  try {
+    const r = await chrome.runtime.sendMessage({ type: 'get-settings' });
+    if (r && r.ok) setMonitoringUI(r.settings.monitoring !== false);
+  } catch (e) {}
+
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab || !tab.url || !tab.url.includes('chess.com')) {
     setStatus('Open Chess.com to start');
@@ -430,24 +488,29 @@ async function init() {
     maiaSection.hidden = true;
     return;
   }
+  if (!monitoring) {
+    setStatus('Analysis paused');
+    noGame.hidden = false;
+    return;
+  }
   try {
     const response = await chrome.tabs.sendMessage(tab.id, { type: 'capture-position' });
     if (response && response.ok) {
-      setStatus('Analyzing...', true);
+      setStatus('Analysing', 'busy');
       armAnalyzingWatchdog();
       noGame.hidden = true;
       await chrome.runtime.sendMessage({ type: 'board-update', fen: response.position.fen });
     } else {
-      setStatus('Waiting for game...');
+      setStatus('Waiting for game');
       noGame.hidden = false;
     }
   } catch (e) {
-    setStatus('Waiting for game...');
+    setStatus('Waiting for game');
     noGame.hidden = false;
   }
 }
 
-document.querySelector('#export-pgn').addEventListener('click', async () => {
+$('#export-pgn').addEventListener('click', async () => {
   const resp = await chrome.runtime.sendMessage({ type: 'export-pgn' });
   if (resp && resp.ok && resp.pgn) {
     const blob = new Blob([resp.pgn], { type: 'application/x-chess-pgn' });
@@ -456,27 +519,54 @@ document.querySelector('#export-pgn').addEventListener('click', async () => {
   }
 });
 
-document.querySelector('#save-game').addEventListener('click', async () => {
+$('#save-game').addEventListener('click', async () => {
   const resp = await chrome.runtime.sendMessage({ type: 'save-game' });
   if (resp && resp.ok) {
-    setStatus('Game saved to archive.');
+    setStatus('Game saved', 'live');
   }
 });
 
-document.querySelector('#settings').addEventListener('click', () => chrome.runtime.openOptionsPage());
+$('#settings').addEventListener('click', () => chrome.runtime.openOptionsPage());
 
 checkUpdateBtn.addEventListener('click', () => refreshUpdateStatus(true));
 
+// Same action as the Ctrl+Shift+A command: the service worker owns the toggle
+// so the state stays consistent across the command, this button and the popup.
+toggleAnalysisBtn.addEventListener('click', async () => {
+  await chrome.storage.local.set({ monitoring: !monitoring });
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab && tab.id) {
+      await chrome.tabs.sendMessage(tab.id, {
+        type: monitoring ? 'start-monitoring' : 'stop-monitoring'
+      });
+    }
+  } catch (e) {}
+  setMonitoringUI(!monitoring);
+  if (monitoring) setStatus('Monitoring active', 'live');
+  else { setStatus('Analysis paused'); clearResultPanels(); noGame.hidden = false; }
+});
+
+// Dark is the default in this build. `darkMode` is stored as-is (true = dark)
+// so a user who explicitly chose light stays on light.
+function applyTheme(dark) {
+  document.body.classList.toggle('light', !dark);
+  document.body.classList.toggle('dark', dark);
+  darkToggle.textContent = dark ? '\u2600' : '\u263D';
+  darkToggle.setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme');
+}
+
 darkToggle.addEventListener('click', async () => {
-  document.body.classList.toggle('dark');
-  const isDark = document.body.classList.contains('dark');
-  await chrome.storage.local.set({ darkMode: isDark });
+  const dark = !document.body.classList.contains('dark');
+  applyTheme(dark);
+  await chrome.storage.local.set({ darkMode: dark });
+  // The graph draws with literal colours, so it has to be repainted on a
+  // theme change or it keeps the previous palette.
+  renderGraph(evalHistory);
 });
 
-chrome.storage.local.get('darkMode', (data) => {
-  if (data.darkMode) document.body.classList.add('dark');
-});
-
+chrome.storage.local.get('darkMode', (data) => applyTheme(data.darkMode !== false));
+applyTheme(true);
 init();
 versionText.textContent = 'v' + chrome.runtime.getManifest().version;
 refreshUpdateStatus(false);

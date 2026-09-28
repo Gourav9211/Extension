@@ -50,6 +50,10 @@ const AUTO_DEFAULTS = {
 //   maiaSearchLines    extra Stockfish lines searched so the guard can score
 //                      Maia's candidates (only while Maia drives auto-play)
 const MAIA_MODELS = ['3m', '5m'];
+
+// Storage key for the Gemini API key. options.js uses the same name as its
+// input id, so the two cannot drift apart again.
+const GEMINI_KEY = 'geminiKey';
 // The upstream UCI engine accepts 0-5000 for its Elo options. These bounds are
 // tighter only to keep a typo in the options page from asking for a strength
 // the model has never seen; real players all land well inside them.
@@ -88,7 +92,7 @@ let lastEval = null;
 // of the newer one.
 let searchesStarted = 0;
 let bestmovesSeen = 0;
-let settings = Object.assign({ depth: 22, multiPv: 3, sound: true, classify: true, autoPlay: false, adaptiveOpponent: true, geminiPrompt: '' }, AUTO_DEFAULTS, MAIA_DEFAULTS);
+let settings = Object.assign({ depth: 22, multiPv: 3, sound: true, classify: true, autoPlay: false, adaptiveOpponent: true, monitoring: true, geminiPrompt: '' }, AUTO_DEFAULTS, MAIA_DEFAULTS);
 
 // Random integer in [min, max]; tolerates a swapped min/max from user input.
 function randMs(min, max) {
@@ -305,11 +309,19 @@ function setCache(fen, data) {
 }
 
 async function loadSettings() {
-  const keys = ['depth', 'multiPv', 'sound', 'classify', 'autoPlay', 'geminiPrompt'].concat(Object.keys(AUTO_DEFAULTS), Object.keys(MAIA_DEFAULTS));
+  // Every key the body below reads must appear here. adaptiveOpponent was
+  // missing from this list, so the options page could turn it off, the value
+  // would be written to storage, and this loader would never see it - the
+  // setting looked like it worked and did nothing.
+  const keys = [
+    'depth', 'multiPv', 'sound', 'classify', 'autoPlay', 'adaptiveOpponent',
+    'monitoring', GEMINI_KEY, 'geminiPrompt'
+  ].concat(Object.keys(AUTO_DEFAULTS), Object.keys(MAIA_DEFAULTS));
   const stored = await chrome.storage.local.get(keys);
   if (stored.depth) settings.depth = stored.depth;
   if (stored.autoPlay != null) settings.autoPlay = !!stored.autoPlay;
   if (stored.adaptiveOpponent != null) settings.adaptiveOpponent = !!stored.adaptiveOpponent;
+  if (stored.monitoring != null) settings.monitoring = !!stored.monitoring;
   if (stored.multiPv) settings.multiPv = stored.multiPv;
   if (stored.sound != null) settings.sound = stored.sound;
   if (stored.classify != null) settings.classify = stored.classify;
@@ -745,7 +757,11 @@ function parseInfoLines(lines) {
 }
 
 async function explainWithGemini(fen, engine) {
-  const { geminiApiKey } = await chrome.storage.local.get('geminiApiKey');
+  // The options page writes GEMINI_KEY, which is the same constant the options
+  // page uses as its input id. These two used to be spelled differently
+  // ("geminiKey" vs "geminiApiKey"), so a key saved in the options page was
+  // never seen here and the feature silently did nothing.
+  const { [GEMINI_KEY]: geminiApiKey } = await chrome.storage.local.get(GEMINI_KEY);
   // No key, no panel noise - the popup hides the explanation section when
   // this returns empty.
   if (!geminiApiKey) return '';
@@ -1694,6 +1710,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     })();
     return true;
   }
+  if (message.type === 'get-settings') {
+    // Lets the popup reflect the live configuration (and the master switch)
+    // without duplicating the defaults in two places.
+    sendResponse({ ok: true, settings: settings });
+    return false;
+  }
   return undefined;
 });
 
@@ -1714,18 +1736,42 @@ chrome.commands.onCommand.addListener((command) => {
   }
 });
 
-chrome.tabs.onActivated.addListener(async (activeInfo) => {
+// The master switch. When off, no tab is ever told to start monitoring, and
+// any tab already running gets stopped, so turning this off actually silences
+// the extension rather than only affecting the next navigation.
+function monitoringEnabled() {
+  return settings.monitoring !== false;
+}
+
+// The options page and the popup both write the master switch straight to
+// storage, so the worker has to listen for that write and re-apply it to any
+// live tab. Without this, the in-memory copy goes stale until the worker
+// restarts and a toggled-off tab would keep sending positions.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || changes.monitoring == null) return;
+  settings.monitoring = !!changes.monitoring.newValue;
+  chrome.tabs.query({}, (tabs) => {
+    for (const tab of tabs) applyMonitoringTo(tab.id);
+  });
+});
+
+async function applyMonitoringTo(tabId) {
   try {
-    const tab = await chrome.tabs.get(activeInfo.tabId);
-    if (tab.url && tab.url.includes('chess.com')) {
-      chrome.tabs.sendMessage(activeInfo.tabId, { type: 'start-monitoring' }).catch(function() {});
-    }
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab.url || !tab.url.includes('chess.com')) return;
+    chrome.tabs.sendMessage(tabId, {
+      type: monitoringEnabled() ? 'start-monitoring' : 'stop-monitoring'
+    }).catch(function() {});
   } catch (e) {}
+}
+
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  await applyMonitoringTo(activeInfo.tabId);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status === 'complete' && tab.url && tab.url.includes('chess.com')) {
-    chrome.tabs.sendMessage(tabId, { type: 'start-monitoring' }).catch(function() {});
+    applyMonitoringTo(tabId);
   }
 });
 

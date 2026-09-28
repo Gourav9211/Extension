@@ -13,6 +13,9 @@ A Chrome Manifest V3 extension that analyzes Chess.com positions in real time us
 - PGN export and game archive (options page)
 - Update checker against the repo's GitHub releases with an in-popup banner
 - FEN analyzer, dark mode, board coordinates overlay
+- Live-analysis master switch (popup and options) that stops watching immediately
+- Redesigned dark-first interface with animated eval meter, depth badge, and a
+  reduced-motion ready palette
 - Toggle live analysis with `Cmd+Shift+A` (`Ctrl+Shift+A` on Windows/Linux)
 
 ## Run locally

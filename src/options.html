@@ -3,384 +3,556 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Chess Analyst Settings</title>
+  <title>Settings - Chess Analyst</title>
+  <link rel="stylesheet" href="popup.css">
   <style>
-    :root {
-      color-scheme: light;
-      --bg: #f2f4ef;
-      --surface: #ffffff;
-      --surface-2: #e9ede5;
-      --border: #dfe4da;
-      --text: #1c2620;
-      --text-dim: #66716a;
-      --accent: #2f6b46;
-      --accent-soft: #ddebe1;
-      --warn: #a05a2c;
-    }
-    * { box-sizing: border-box; }
+    /* Options page reuses the popup's token set and adds page-level layout.
+       Keeping one stylesheet means one palette to maintain; only the shell
+       differs. */
     body {
-      max-width: 560px; margin: 0 auto; padding: 28px 20px 48px;
-      font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-      background:
-        radial-gradient(700px 260px at 90% -60px, rgba(47,107,70,0.14), transparent),
-        var(--bg);
-      color: var(--text);
+      width: auto; max-width: 720px; margin: 0 auto; padding: 28px 20px 72px;
+      background: var(--bg);
     }
-    .page-head { margin-bottom: 22px; }
-    .eyebrow {
-      display: inline-flex; align-items: center; gap: 6px;
-      padding: 3px 10px; background: var(--accent-soft); color: var(--accent);
-      border-radius: 999px; font: 700 10px/1.4 ui-monospace, monospace; letter-spacing: 1.4px;
-    }
-    .eyebrow::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
-    h1 { margin: 8px 0 0; font-size: 26px; font-weight: 800; letter-spacing: -0.4px; }
+    @media (prefers-color-scheme: light) { body:not(.dark) { background: #f6f7f9; } }
 
-    .section {
-      background: var(--surface); border: 1px solid var(--border);
-      border-radius: 14px; padding: 18px; margin-bottom: 14px;
-      box-shadow: 0 1px 3px rgba(28,38,32,0.05);
-    }
-    .section h2 {
+    .page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+    .page-head h1 { font-size: 22px; font-weight: 680; letter-spacing: -.02em; }
+    .page-head .brand-mark { width: 30px; height: 30px; font-size: 15px; border-radius: 8px; }
+    .page-head .spacer { flex: 1; }
+
+    .intro { color: var(--text-dim); font-size: 13px; margin-bottom: 20px; line-height: 1.6; }
+
+    /* Sections as a stack of cards, each with a sticky-ish header. */
+    .section { margin-bottom: 16px; }
+    .section > h2 {
       display: flex; align-items: center; gap: 8px;
-      margin: 0 0 14px; font-size: 11px; font-weight: 800;
-      text-transform: uppercase; letter-spacing: 1.2px; color: var(--accent);
+      font-size: 11px; font-weight: 700; letter-spacing: .09em;
+      text-transform: uppercase; color: var(--text-faint);
+      margin: 0 0 9px 2px;
     }
-    .section h2::after { content: ''; flex: 1; height: 1px; background: var(--border); }
-    .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-    .row:last-of-type { margin-bottom: 0; }
-    .row label { font-size: 13.5px; line-height: 1.4; }
-    .hint { margin: 6px 0 0; color: var(--text-dim); font-size: 12px; line-height: 1.5; }
-    .warn { margin: 8px 0 0; color: var(--warn); font-size: 12px; line-height: 1.5; }
-    .row input[type="number"], .row input[type="text"], .row select, .row input[type="password"] {
-      width: 110px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 9px;
-      font: 500 13.5px/1 sans-serif; background: var(--bg); color: var(--text);
-      transition: border-color .15s ease;
+    .section > h2 .count {
+      font: 500 10px/1 var(--mono); letter-spacing: 0; text-transform: none;
+      color: var(--text-faint); opacity: .8;
     }
-    .row input:focus, .row select:focus { outline: none; border-color: var(--accent); }
-    textarea {
-      width: 100%; min-height: 84px; padding: 10px; margin-top: 8px;
-      border: 1px solid var(--border); border-radius: 10px; resize: vertical;
-      font: 13px/1.5 sans-serif; background: var(--bg); color: var(--text);
-    }
-    textarea:focus { outline: none; border-color: var(--accent); }
 
-    .toggle { position: relative; width: 42px; height: 24px; flex-shrink: 0; }
-    .toggle input { opacity: 0; width: 0; height: 0; }
-    .toggle .slider { position: absolute; inset: 0; background: #cdd4cc; border-radius: 999px; cursor: pointer; transition: .2s; }
-    .toggle .slider:before { content: ''; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: #fff; border-radius: 50%; transition: .2s; box-shadow: 0 1px 2px rgba(0,0,0,0.2); }
-    .toggle input:checked + .slider { background: var(--accent); }
-    .toggle input:checked + .slider:before { transform: translateX(18px); }
+    /* A setting row: label + hint on the left, control on the right. */
+    .set {
+      display: grid; grid-template-columns: 1fr auto;
+      align-items: center; gap: 16px;
+      padding: 11px 0;
+      border-bottom: 1px solid var(--border);
+      transition: opacity .2s var(--ease);
+    }
+    .set:last-child { border-bottom: 0; }
+    .set.disabled { opacity: .4; pointer-events: none; }
+    .set-label { font-size: 13.5px; font-weight: 500; }
+    .set-hint { margin-top: 3px; font-size: 12px; line-height: 1.5; color: var(--text-faint); max-width: 52ch; }
+    .set-control { display: flex; align-items: center; gap: 8px; }
 
+    input[type="number"], input[type="text"], input[type="password"], select, textarea {
+      padding: 7px 10px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--r-sm);
+      color: var(--text);
+      font: 500 13px/1.2 var(--font);
+      transition: border-color .15s var(--ease), background .15s var(--ease);
+    }
+    input[type="number"] { width: 92px; font-family: var(--mono); }
+    input[type="text"], input[type="password"] { width: 100%; min-width: 200px; }
+    input:focus, select:focus, textarea:focus {
+      outline: none; border-color: var(--accent); background: var(--surface);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    select { cursor: pointer; }
+    textarea { width: 100%; min-height: 88px; resize: vertical; line-height: 1.5; }
+
+    /* Toggle switch: the whole control is the hit target, and the knob
+       animates on state change. */
+    .toggle { position: relative; width: 40px; height: 23px; flex: none; cursor: pointer; }
+    .toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
+    .toggle .track {
+      position: absolute; inset: 0;
+      background: var(--surface-3); border-radius: 999px;
+      transition: background .22s var(--ease);
+    }
+    .toggle .knob {
+      position: absolute; top: 3px; left: 3px;
+      width: 17px; height: 17px; border-radius: 50%;
+      background: #fff; box-shadow: 0 1px 3px #0006;
+      transition: transform .22s var(--ease);
+    }
+    .toggle input:checked + .track { background: var(--accent); }
+    .toggle input:checked + .track .knob { transform: translateX(17px); }
+    .toggle input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    .note {
+      padding: 10px 12px; margin-top: 4px;
+      background: var(--warn-soft);
+      border: 1px solid #f0b45e33; border-radius: var(--r-sm);
+      font-size: 12px; line-height: 1.55; color: var(--text-dim);
+    }
+    .note strong { color: var(--warn); }
+
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; padding-top: 4px; }
     .btn {
-      padding: 10px 16px; border: 0; border-radius: 10px; cursor: pointer;
-      background: linear-gradient(180deg, #37754e, var(--accent)); color: #fff;
-      font: 700 13px sans-serif; box-shadow: 0 1px 2px rgba(28,38,32,0.25);
+      padding: 9px 14px;
+      border: 1px solid var(--border); border-radius: var(--r-sm);
+      background: var(--surface-2); color: var(--text-dim);
+      font: 600 12.5px/1 var(--font); cursor: pointer;
+      transition: background .16s var(--ease), color .16s var(--ease), transform .12s var(--ease);
     }
-    .btn:hover { filter: brightness(1.08); }
-    .btn.secondary { background: var(--surface); border: 1px solid var(--border); color: var(--text); box-shadow: none; font-weight: 600; }
-    .btn.secondary:hover { background: var(--surface-2); filter: none; }
-    .status { min-height: 18px; margin-top: 10px; color: var(--accent); font: 600 13px sans-serif; }
+    .btn:hover { background: var(--surface-3); color: var(--text); }
+    .btn:active { transform: scale(.97); }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-primary:hover { filter: brightness(1.08); background: var(--accent); color: #fff; }
+    .btn-danger { color: var(--bad); border-color: #f8717133; }
+    .btn-danger:hover { background: #f8717114; color: var(--bad); }
 
+    .archive-list { max-height: 300px; overflow-y: auto; margin: 0 -4px; }
     .archive-item {
-      padding: 9px 12px; border-bottom: 1px solid var(--border);
-      font-size: 13px; cursor: pointer; border-radius: 8px;
+      display: flex; align-items: center; gap: 10px;
+      padding: 9px 10px; border-radius: var(--r-sm);
+      font-size: 12.5px; cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      transition: background .15s var(--ease);
     }
-    .archive-item:hover { background: var(--accent-soft); }
-    .archive-item .date { color: var(--accent); font-weight: 700; }
-    .archive-list { max-height: 300px; overflow-y: auto; }
-    .empty { color: #9aa39b; font-style: italic; padding: 12px 0; font-size: 13px; }
-    #accuracyStats .row { justify-content: space-between; }
-    #fenInput {
-      flex: 1; padding: 8px 10px; border: 1px solid var(--border); border-radius: 9px;
-      font: 12.5px ui-monospace, monospace; background: var(--bg); color: var(--text);
-    }
-    #fenInput:focus { outline: none; border-color: var(--accent); }
+    .archive-item:hover { background: var(--surface-2); }
+    .archive-item .date { font-weight: 650; color: var(--text); }
+    .archive-item .meta { color: var(--text-faint); font: 11.5px/1 var(--mono); }
+    .empty { color: var(--text-faint); font-size: 12.5px; padding: 14px 2px; }
 
-    /* Dark mode */
-    body.dark {
-      --bg: #141815;
-      --surface: #1f2420;
-      --surface-2: #292f2a;
-      --border: #333b34;
-      --text: #dcded8;
-      --text-dim: #98a19a;
-      --accent: #58a97a;
-      --accent-soft: #24352b;
-      --warn: #d09a68;
+    .fen-row { display: flex; gap: 8px; }
+    .fen-row input { flex: 1; font-family: var(--mono); font-size: 12.5px; }
+
+    .toast {
+      position: fixed; left: 50%; bottom: 24px;
+      transform: translate(-50%, 14px);
+      padding: 9px 16px; border-radius: 999px;
+      background: var(--surface-3); border: 1px solid var(--border-strong);
+      color: var(--text); font: 600 12.5px/1 var(--font);
+      opacity: 0; pointer-events: none;
+      box-shadow: 0 8px 24px #0006;
+      transition: opacity .22s var(--ease), transform .22s var(--ease);
+      z-index: 50;
     }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
   </style>
 </head>
 <body>
   <div class="page-head">
-    <span class="eyebrow">CHESS POSITION ANALYST</span>
+    <div class="brand-mark" aria-hidden="true">&#9822;</div>
     <h1>Settings</h1>
+    <span class="spacer"></span>
+    <button id="dark-toggle" class="icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">&#9789;</button>
+  </div>
+
+  <p class="intro">
+    Everything runs on this machine. Stockfish and Maia are bundled with the
+    extension and no position is ever sent anywhere - only the Gemini
+    explanation, and only if you add a key.
+  </p>
+
+  <div class="section">
+    <h2>General</h2>
+    <div class="card">
+      <div class="set">
+        <div>
+          <div class="set-label">Live analysis</div>
+          <div class="set-hint">Master switch. When off, no board is watched and the
+            extension stays idle until you turn it back on.</div>
+        </div>
+        <div class="set-control">
+          <label class="toggle"><input type="checkbox" id="monitoring" checked><span class="track"><span class="knob"></span></span></label>
+        </div>
+      </div>
+      <div class="set" data-requires="monitoring">
+        <div>
+          <div class="set-label">Board coordinates</div>
+          <div class="set-hint">Show file and rank labels on the chess.com board.</div>
+        </div>
+        <div class="set-control">
+          <label class="toggle"><input type="checkbox" id="coords" checked><span class="track"><span class="knob"></span></span></label>
+        </div>
+      </div>
+      <div class="set" data-requires="monitoring">
+        <div>
+          <div class="set-label">Sound notification</div>
+          <div class="set-hint">Short chime when a new best move is ready.</div>
+        </div>
+        <div class="set-control">
+          <label class="toggle"><input type="checkbox" id="sound" checked><span class="track"><span class="knob"></span></span></label>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="section">
     <h2>Engine</h2>
-    <div class="row">
-      <label>Analysis depth (higher = stronger, slower)</label>
-      <input id="depth" type="number" min="10" max="45" value="22">
-    </div>
-    <div class="row">
-      <label>Engine move time (ms per position)</label>
-      <input id="engineMoveTimeMs" type="number" min="1000" max="60000" step="500" value="8000">
-    </div>
-    <div class="row">
-      <label>Position update debounce (ms)</label>
-      <input id="debounceMs" type="number" min="100" max="5000" step="100" value="500">
-    </div>
-    <div class="row">
-      <label>Multi-PV (lines)</label>
-      <select id="multiPv">
-        <option value="1">1</option>
-        <option value="2">2</option>
-        <option value="3" selected>3</option>
-        <option value="4">4</option>
-        <option value="5">5</option>
-      </select>
-    </div>
-    <div class="row">
-      <label>Auto-play recommended move</label>
-      <label class="toggle"><input type="checkbox" id="autoPlay"><span class="slider"></span></label>
-    </div>
-    <div class="row">
-      <label>Adapt to opponent rating</label>
-      <label class="toggle"><input type="checkbox" id="adaptiveOpponent" checked><span class="slider"></span></label>
-    </div>
-    <p class="hint" style="margin:4px 0 0;">
-      Reads the opponent's chess.com rating and adjusts automatically: vs
-      lower-rated players it deviates to 2nd/3rd-best moves more often and
-      replies a touch faster; vs higher-rated ones it plays the engine's best
-      more often and matches their pace more closely.
-    </p>
-    <p class="warn" style="margin:4px 0 0;">
-      Clicks the suggested move on the board automatically. Engine assistance
-      and automation violate chess.com fair-play rules and can get your account
-      banned - intended for practice against the computer.
-    </p>
-  </div>
-
-  <div class="section">
-    <h2>Auto-play timing</h2>
-    <p class="hint" style="margin:0 0 12px;">
-      Humanised think times for auto-played moves. "Match opponent" replies just
-      faster than their measured pace. "Balance with both players" also replies
-      faster than the opponent, using their pace as the reference. "Random window"
-      uses fixed min/max values. The "Max move time" cap applies to all modes.
-      Occasionally a quiet position gets an alternative ("normal") move instead
-      of the engine's best.
-    </p>
-    <div class="row">
-      <label>Move timing</label>
-      <select id="autoTimingMode">
-        <option value="match" selected>Match opponent (1s faster)</option>
-        <option value="balance">Balance with both players</option>
-        <option value="random">Random window</option>
-      </select>
-    </div>
-    <div class="row">
-      <label>Beat opponent by (ms)</label>
-      <input id="autoBeatByMs" type="number" min="0" max="60000" step="100" value="1000">
-    </div>
-    <div class="row">
-      <label>Max move time (ms)</label>
-      <input id="maxAutoPlayMs" type="number" min="1000" max="60000" step="500" value="9000">
-    </div>
-    <div class="row">
-      <label>Think time min (ms)</label>
-      <input id="autoDelayMinMs" type="number" min="0" max="600000" step="100" value="2500">
-    </div>
-    <div class="row">
-      <label>Think time max (ms)</label>
-      <input id="autoDelayMaxMs" type="number" min="0" max="600000" step="100" value="4000">
-    </div>
-    <div class="row">
-      <label>Slow moves - frequency (1 in N, 0 = never)</label>
-      <input id="autoSlowOneIn" type="number" min="0" max="100" value="3">
-    </div>
-    <div class="row">
-      <label>Slow think time min (ms)</label>
-      <input id="autoSlowMinMs" type="number" min="0" max="600000" step="100" value="5500">
-    </div>
-    <div class="row">
-      <label>Slow think time max (ms)</label>
-      <input id="autoSlowMaxMs" type="number" min="0" max="600000" step="100" value="10000">
-    </div>
-    <div class="row">
-      <label>Alternative moves - frequency (1 in N, 0 = never)</label>
-      <input id="autoNormalOneIn" type="number" min="0" max="100" value="5">
-    </div>
-    <div class="row">
-      <label>Quiet-position limit (&plusmn; centipawns)</label>
-      <input id="autoNormalEvalCp" type="number" min="10" max="2000" step="10" value="150">
-    </div>
-    <p class="hint" style="margin:4px 0 0;">
-      Alternative moves are only played in quiet positions: no mate on the
-      board, evaluation within the limit above, no tablebase verdict. Mates and
-      critical positions always get the engine's best move.
-    </p>
-  </div>
-
-  <div class="section">
-    <h2>Maia (human-like moves)</h2>
-    <p class="hint" style="margin:0 0 12px;">
-      Maia 3 is a chess transformer trained on real human games. Instead of
-      "best move, or the 2nd best every so often", it plays the move a player of
-      the chosen strength would actually pick. Runs entirely on-device - the
-      network is bundled with the extension and no position ever leaves your
-      computer.
-    </p>
-    <div class="row">
-      <label>Enable Maia</label>
-      <label class="toggle"><input type="checkbox" id="maiaEnabled"><span class="slider"></span></label>
-    </div>
-    <div class="row">
-      <label>Model</label>
-      <select id="maiaModel">
-        <option value="3m">3M (fastest, 6 MB)</option>
-        <option value="5m" selected>5M (best, 10 MB)</option>
-      </select>
-    </div>
-    <p class="hint" style="margin:4px 0 0;">
-      The rating below is fed to the network rather than choosing a separate
-      file, so either model covers every rating. The 3M model is an ablation
-      trained without the positional-bias components; it plays plausibly but
-      noticeably worse.
-    </p>
-    <div class="row">
-      <label>Player strength (Elo)</label>
-      <input id="maiaElo" type="number" min="100" max="3000" step="10" value="1500">
-    </div>
-    <div class="row">
-      <label>Opponent strength (Elo)</label>
-      <input id="maiaOpponentElo" type="number" min="0" max="3000" step="10" value="0">
-    </div>
-    <p class="hint" style="margin:4px 0 0;">
-      0 means "assume the opponent is the same strength as the player", which is
-      usually what you want when Maia is playing both sides. Set it to model a
-      specific opponent.
-    </p>
-    <div class="row">
-      <label>Play Maia's move in auto-play</label>
-      <label class="toggle"><input type="checkbox" id="maiaAutoPlay"><span class="slider"></span></label>
-    </div>
-    <p class="hint" style="margin:4px 0 0;">
-      Replaces the 2nd/3rd-best "alternative move" logic above while auto-play is
-      on. The two are never combined.
-    </p>
-    <div class="row">
-      <label>Show Maia in the popup</label>
-      <label class="toggle"><input type="checkbox" id="maiaShow" checked><span class="slider"></span></label>
-    </div>
-    <div class="row">
-      <label>Blunder guard (&plusmn; centipawns)</label>
-      <input id="maiaMaxLossCp" type="number" min="0" max="1000" step="10" value="120">
-    </div>
-    <p class="hint" style="margin:4px 0 0;">
-      A weak player hangs pieces. Any Maia move that costs more than this many
-      centipawns against Stockfish is rejected, and the best safe alternative
-      is played instead. Set to 0 to let Maia play unfiltered.
-    </p>
-    <div class="row">
-      <label>Maia candidate moves</label>
-      <input id="maiaCandidatePool" type="number" min="1" max="10" step="1" value="3">
-    </div>
-    <div class="row">
-      <label>Temperature</label>
-      <input id="maiaTemperature" type="number" min="0.05" max="5" step="0.05" value="1">
-    </div>
-    <p class="hint" style="margin:4px 0 0;">
-      How far Maia is allowed to wander from its favourite move. 1 follows
-      Maia's own probabilities, higher values play more varied moves, lower
-      values stick to the top choice.
-    </p>
-    <div class="row">
-      <label>Engine lines for the guard</label>
-      <input id="maiaSearchLines" type="number" min="1" max="10" step="1" value="6">
-    </div>
-    <p class="hint" style="margin:4px 0 0;">
-      Extra Stockfish lines searched while Maia drives auto-play, so its
-      candidates can be scored. Costs a little engine time; the popup still
-      shows only the lines from the Engine tab.
-    </p>
-    <p class="warn" style="margin:8px 0 0;">
-      Maia models imperfect human play, so it will play sub-optimally by design.
-      Auto-play of any kind violates chess.com fair-play rules and can get your
-      account banned - intended for practice against the computer.
-    </p>
-  </div>
-
-  <div class="section">
-    <h2>UI</h2>
-    <div class="row">
-      <label>Sound notification</label>
-      <label class="toggle"><input type="checkbox" id="sound" checked><span class="slider"></span></label>
-    </div>
-    <div class="row">
-      <label>Dark mode</label>
-      <label class="toggle"><input type="checkbox" id="darkMode"><span class="slider"></span></label>
-    </div>
-    <div class="row">
-      <label>Board coordinates</label>
-      <label class="toggle"><input type="checkbox" id="coords" checked><span class="slider"></span></label>
-    </div>
-    <div class="row">
-      <label>Win probability graph</label>
-      <label class="toggle"><input type="checkbox" id="graph" checked><span class="slider"></span></label>
-    </div>
-    <div class="row">
-      <label>Move history panel</label>
-      <label class="toggle"><input type="checkbox" id="history" checked><span class="slider"></span></label>
-    </div>
-    <div class="row">
-      <label>Move classification labels</label>
-      <label class="toggle"><input type="checkbox" id="classify" checked><span class="slider"></span></label>
+    <div class="card">
+      <div class="set" data-requires="monitoring">
+        <div>
+          <div class="set-label">Analysis depth</div>
+          <div class="set-hint">Higher is stronger but slower. 22 is a good balance.</div>
+        </div>
+        <div class="set-control"><input id="depth" type="number" min="10" max="45" value="22"></div>
+      </div>
+      <div class="set" data-requires="monitoring">
+        <div>
+          <div class="set-label">Engine move time (ms)</div>
+          <div class="set-hint">Hard cap on how long the engine may think per position.</div>
+        </div>
+        <div class="set-control"><input id="engineMoveTimeMs" type="number" min="1000" max="60000" step="500" value="8000"></div>
+      </div>
+      <div class="set" data-requires="monitoring">
+        <div>
+          <div class="set-label">Move time cap (ms)</div>
+          <div class="set-hint">Keeps the popup responsive on positions where the depth
+            limit and the time limit disagree.</div>
+        </div>
+        <div class="set-control"><input id="debounceMs" type="number" min="100" max="5000" step="100" value="500"></div>
+      </div>
+      <div class="set" data-requires="monitoring">
+        <div>
+          <div class="set-label">Multi-PV (lines)</div>
+          <div class="set-hint">How many candidate moves to score, so the popup can show
+            runner-up options.</div>
+        </div>
+        <div class="set-control">
+          <select id="multiPv">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="3" selected>3</option>
+            <option value="4">4</option>
+            <option value="5">5</option>
+          </select>
+        </div>
+      </div>
     </div>
   </div>
 
   <div class="section">
-    <h2>Gemini AI</h2>
-    <div class="row">
-      <label>API key</label>
-      <input id="geminiKey" type="password" style="width:200px" autocomplete="off">
+    <h2>Auto-play <span class="count" id="autoplay-count"></span></h2>
+    <div class="card">
+      <div class="set" data-requires="monitoring">
+        <div>
+          <div class="set-label">Play the recommended move</div>
+          <div class="set-hint">Clicks the move on the board for you.</div>
+        </div>
+        <div class="set-control">
+          <label class="toggle"><input type="checkbox" id="autoPlay"><span class="track"><span class="knob"></span></span></label>
+        </div>
+      </div>
+      <div class="set" data-requires="autoPlay">
+        <div>
+          <div class="set-label">Adapt to opponent rating</div>
+          <div class="set-hint">Reads the opponent's chess.com rating and adjusts: against
+            lower-rated players it deviates more and replies a little faster.</div>
+        </div>
+        <div class="set-control">
+          <label class="toggle"><input type="checkbox" id="adaptiveOpponent" checked><span class="track"><span class="knob"></span></span></label>
+        </div>
+      </div>
+      <div class="set" data-requires="autoPlay">
+        <div>
+          <div class="set-label">Move timing</div>
+          <div class="set-hint">How long to wait before playing. "Match opponent" replies
+            just faster than their measured pace.</div>
+        </div>
+        <div class="set-control">
+          <select id="autoTimingMode">
+            <option value="match" selected>Match opponent</option>
+            <option value="balance">Balance both players</option>
+            <option value="random">Random window</option>
+          </select>
+        </div>
+      </div>
+      <div class="set" data-requires="autoPlay">
+        <div>
+          <div class="set-label">Beat opponent by (ms)</div>
+          <div class="set-hint">How much faster to reply than the opponent's pace.</div>
+        </div>
+        <div class="set-control"><input id="autoBeatByMs" type="number" min="0" max="60000" step="100" value="1000"></div>
+      </div>
+      <div class="set" data-requires="autoPlay">
+        <div>
+          <div class="set-label">Max move time (ms)</div>
+          <div class="set-hint">Upper bound applied in every timing mode.</div>
+        </div>
+        <div class="set-control"><input id="maxAutoPlayMs" type="number" min="1000" max="60000" step="500" value="9000"></div>
+      </div>
+      <div class="set" data-requires="autoPlay">
+        <div>
+          <div class="set-label">Think time min (ms)</div>
+          <div class="set-hint">Fastest a move is ever played.</div>
+        </div>
+        <div class="set-control"><input id="autoDelayMinMs" type="number" min="0" max="600000" step="100" value="2500"></div>
+      </div>
+      <div class="set" data-requires="autoPlay">
+        <div>
+          <div class="set-label">Think time max (ms)</div>
+          <div class="set-hint">Slowest a normal move is played.</div>
+        </div>
+        <div class="set-control"><input id="autoDelayMaxMs" type="number" min="0" max="600000" step="100" value="4000"></div>
+      </div>
+      <div class="set" data-requires="autoPlay">
+        <div>
+          <div class="set-label">Slow moves - frequency (1 in N)</div>
+          <div class="set-hint">0 disables slow moves entirely.</div>
+        </div>
+        <div class="set-control"><input id="autoSlowOneIn" type="number" min="0" max="100" value="3"></div>
+      </div>
+      <div class="set" data-requires="autoPlay">
+        <div>
+          <div class="set-label">Slow think time min (ms)</div>
+          <div class="set-hint">Lower bound for a deliberately slow move.</div>
+        </div>
+        <div class="set-control"><input id="autoSlowMinMs" type="number" min="0" max="600000" step="100" value="5500"></div>
+      </div>
+      <div class="set" data-requires="autoPlay">
+        <div>
+          <div class="set-label">Slow think time max (ms)</div>
+          <div class="set-hint">Upper bound for a deliberately slow move.</div>
+        </div>
+        <div class="set-control"><input id="autoSlowMaxMs" type="number" min="0" max="600000" step="100" value="10000"></div>
+      </div>
+      <div class="set" data-requires="autoPlay">
+        <div>
+          <div class="set-label">Alternative moves - frequency (1 in N)</div>
+          <div class="set-hint">How often a quiet position gets a 2nd/3rd-best move instead
+            of the engine's first choice. 0 disables this.</div>
+        </div>
+        <div class="set-control"><input id="autoNormalOneIn" type="number" min="0" max="100" value="5"></div>
+      </div>
+      <div class="set" data-requires="autoPlay">
+        <div>
+          <div class="set-label">Quiet-position limit (&plusmn; cp)</div>
+          <div class="set-hint">Alternative moves are only played when the evaluation is
+            within this margin. Mates and critical positions always get the best move.</div>
+        </div>
+        <div class="set-control"><input id="autoNormalEvalCp" type="number" min="10" max="2000" step="10" value="150"></div>
+      </div>
+      <p class="note" id="autoPlayConflict" hidden>
+        <strong>Conflict.</strong> "Play Maia's move in auto-play" is on in the Maia section.
+        Maia's auto-play replaces this alternative-move logic entirely, so the settings below
+        won't affect played moves.
+      </p>
+      <p class="note">
+        <strong>Fair play.</strong> Auto-play clicks moves for you. Engine assistance and
+        automation violate chess.com's rules and can get your account banned. This is for
+        practice against the computer only.
+      </p>
     </div>
-    <div class="row">
-      <label>Custom prompt</label>
-    </div>
-    <textarea id="geminiPrompt" placeholder="Leave blank for default prompt..."></textarea>
   </div>
 
   <div class="section">
-    <h2>FEN Analyzer</h2>
-    <div class="row">
-      <label>Paste a FEN to analyze</label>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:8px">
-      <input id="fenInput" type="text" style="flex:1;padding:6px 8px;border:1px solid #c8d0c3;border-radius:4px;font:13px monospace" placeholder="rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1">
-      <button class="btn" id="analyzeFen">Analyze</button>
+    <h2>Maia <span class="count" id="maia-count"></span></h2>
+    <div class="card">
+      <div class="set">
+        <div>
+          <div class="set-label">Enable Maia</div>
+          <div class="set-hint">Predict the move a human of a given strength would actually
+            play, mistakes included, instead of always taking the engine's first choice.</div>
+        </div>
+        <div class="set-control">
+          <label class="toggle"><input type="checkbox" id="maiaEnabled"><span class="track"><span class="knob"></span></span></label>
+        </div>
+      </div>
+      <div class="set maia-child">
+        <div>
+          <div class="set-label">Model</div>
+          <div class="set-hint">The 3M model is faster and smaller; the 5M model plays
+            noticeably better. Either covers every rating.</div>
+        </div>
+        <div class="set-control">
+          <select id="maiaModel">
+            <option value="3m">3M - 6 MB, fastest</option>
+            <option value="5m" selected>5M - 10 MB, best</option>
+          </select>
+        </div>
+      </div>
+      <div class="set maia-child">
+        <div>
+          <div class="set-label">Player strength (Elo)</div>
+          <div class="set-hint">Any rating from 100 to 3000. It is fed to the network, not
+            chosen from a list of models.</div>
+        </div>
+        <div class="set-control"><input id="maiaElo" type="number" min="100" max="3000" step="10" value="1500"></div>
+      </div>
+      <div class="set maia-child">
+        <div>
+          <div class="set-label">Opponent strength (Elo)</div>
+          <div class="set-hint">0 means "assume the opponent is equally strong", which is
+            usually right when Maia plays both sides.</div>
+        </div>
+        <div class="set-control"><input id="maiaOpponentElo" type="number" min="0" max="3000" step="10" value="0"></div>
+      </div>
+      <div class="set maia-child">
+        <div>
+          <div class="set-label">Play Maia's move in auto-play</div>
+          <div class="set-hint">Replaces the alternative-move logic above. The two are
+            never combined.</div>
+        </div>
+        <div class="set-control">
+          <label class="toggle"><input type="checkbox" id="maiaAutoPlay"><span class="track"><span class="knob"></span></span></label>
+        </div>
+      </div>
+      <div class="set maia-child">
+        <div>
+          <div class="set-label">Show Maia in the popup</div>
+          <div class="set-hint">Adds Maia's own move distribution to the popup.</div>
+        </div>
+        <div class="set-control">
+          <label class="toggle"><input type="checkbox" id="maiaShow" checked><span class="track"><span class="knob"></span></span></label>
+        </div>
+      </div>
+      <div class="set maia-child">
+        <div>
+          <div class="set-label">Blunder guard (&plusmn; cp)</div>
+          <div class="set-hint">A weak player hangs pieces. Any Maia move costing more than
+            this against Stockfish is rejected and the safest alternative is played
+            instead. 0 disables the guard.</div>
+        </div>
+        <div class="set-control"><input id="maiaMaxLossCp" type="number" min="0" max="1000" step="10" value="120"></div>
+      </div>
+      <div class="set maia-child">
+        <div>
+          <div class="set-label">Maia candidate moves</div>
+          <div class="set-hint">How many of Maia's top moves may be played. Higher values let
+            it choose from more of its own preferences.</div>
+        </div>
+        <div class="set-control"><input id="maiaCandidatePool" type="number" min="1" max="10" step="1" value="3"></div>
+      </div>
+      <div class="set maia-child">
+        <div>
+          <div class="set-label">Temperature</div>
+          <div class="set-hint">How far Maia may wander from its favourite move. 1 follows
+            Maia's own probabilities.</div>
+        </div>
+        <div class="set-control"><input id="maiaTemperature" type="number" min="0.05" max="5" step="0.05" value="1"></div>
+      </div>
+      <div class="set maia-child">
+        <div>
+          <div class="set-label">Engine lines for the guard</div>
+          <div class="set-hint">Extra Stockfish lines searched so Maia's candidates can be
+            scored. Costs a little engine time.</div>
+        </div>
+        <div class="set-control"><input id="maiaSearchLines" type="number" min="1" max="10" step="1" value="6"></div>
+      </div>
+      <p class="note">
+        <strong>Limits.</strong> Maia reads the position only: castling rights, en passant and
+        the clocks are not part of its input, so it will not castle for safety or count moves
+        in a time scramble. <strong>Fair play:</strong> any auto-play violates chess.com's
+        rules and can get your account banned.
+      </p>
     </div>
   </div>
 
   <div class="section">
-    <h2>Game Archive</h2>
-    <div id="archiveList" class="archive-list">
-      <div class="empty">No saved games yet.</div>
+    <h2>Display</h2>
+    <div class="card">
+      <div class="set">
+        <div>
+          <div class="set-label">Dark theme</div>
+          <div class="set-hint">The interface is built dark-first.</div>
+        </div>
+        <div class="set-control">
+          <label class="toggle"><input type="checkbox" id="darkMode" checked><span class="track"><span class="knob"></span></span></label>
+        </div>
+      </div>
+      <div class="set" data-requires="monitoring">
+        <div>
+          <div class="set-label">Win probability graph</div>
+          <div class="set-hint">Evaluation over the course of the game.</div>
+        </div>
+        <div class="set-control">
+          <label class="toggle"><input type="checkbox" id="graph" checked><span class="track"><span class="knob"></span></span></label>
+        </div>
+      </div>
+      <div class="set" data-requires="monitoring">
+        <div>
+          <div class="set-label">Move history</div>
+          <div class="set-hint">List of moves analysed so far, with classifications.</div>
+        </div>
+        <div class="set-control">
+          <label class="toggle"><input type="checkbox" id="history" checked><span class="track"><span class="knob"></span></span></label>
+        </div>
+      </div>
+      <div class="set" data-requires="monitoring">
+        <div>
+          <div class="set-label">Move classification</div>
+          <div class="set-hint">Blunder, mistake, inaccuracy and good-move labels.</div>
+        </div>
+        <div class="set-control">
+          <label class="toggle"><input type="checkbox" id="classify" checked><span class="track"><span class="knob"></span></span></label>
+        </div>
+      </div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn secondary" id="exportAll">Export all PGN</button>
-      <button class="btn secondary" id="clearArchive">Clear archive</button>
+  </div>
+
+  <div class="section">
+    <h2>Gemini explanation</h2>
+    <div class="card">
+      <div class="set">
+        <div>
+          <div class="set-label">API key</div>
+          <div class="set-hint">Optional. Without a key the "Why" panel is simply hidden.
+            The key is stored in this browser only.</div>
+        </div>
+        <div class="set-control">
+          <input id="geminiKey" type="password" autocomplete="off" placeholder="AIza...">
+        </div>
+      </div>
+      <div class="set" style="display:block">
+        <div>
+          <div class="set-label" style="margin-bottom:8px">Custom prompt</div>
+          <div class="set-hint" style="margin-bottom:8px">
+            Use <code>{fen}</code>, <code>{move}</code> and <code>{line}</code> as
+            placeholders. Leave blank for the built-in prompt.
+          </div>
+          <textarea id="geminiPrompt" placeholder="Explain why this move is best..."></textarea>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Tools</h2>
+    <div class="card">
+      <div class="set" style="display:block">
+        <div>
+          <div class="set-label" style="margin-bottom:8px">FEN analyzer</div>
+          <div class="set-hint" style="margin-bottom:8px">Analyse any position without playing.</div>
+          <div class="fen-row">
+            <input id="fenInput" type="text" placeholder="rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1">
+            <button class="btn btn-primary" id="analyzeFen">Analyse</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Archive</h2>
+    <div class="card">
+      <div id="archiveList" class="archive-list">
+        <div class="empty">No saved games yet.</div>
+      </div>
+      <div class="actions" style="margin-top:12px">
+        <button class="btn" id="exportAll">Export all PGN</button>
+        <button class="btn btn-danger" id="clearArchive">Clear archive</button>
+      </div>
     </div>
   </div>
 
   <div class="section">
     <h2>Accuracy</h2>
-    <div id="accuracyStats">
-      <div class="empty">Play and analyze games to see your accuracy score.</div>
+    <div class="card">
+      <div id="accuracyStats"><div class="empty">Play and analyse games to see your accuracy score.</div></div>
     </div>
   </div>
 
-  <p class="status" id="status"></p>
+  <div class="toast" id="status" role="status" aria-live="polite"></div>
   <script src="options.js"></script>
 </body>
 </html>

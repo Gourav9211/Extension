@@ -5,7 +5,7 @@ const DEFAULTS = {
   adaptiveOpponent: true,
   multiPv: 3,
   sound: true,
-  darkMode: false,
+  darkMode: true,
   coords: true,
   graph: true,
   history: true,
@@ -33,7 +33,8 @@ const DEFAULTS = {
   maiaMaxLossCp: 120,
   maiaCandidatePool: 3,
   maiaTemperature: 1,
-  maiaSearchLines: 6
+  maiaSearchLines: 6,
+  monitoring: true
 };
 
 // Fields that accept fractional values; parseInt would floor them to 0.
@@ -45,18 +46,65 @@ const MAIA_CHILD_FIELDS = [
   'maiaMaxLossCp', 'maiaCandidatePool', 'maiaTemperature', 'maiaSearchLines'
 ];
 
+let statusTimer = null;
+function setStatus(msg) {
+  const el = $('#status');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(statusTimer);
+  statusTimer = setTimeout(() => {
+    el.classList.remove('show');
+    el.textContent = '';
+  }, 2200);
+}
+
+function applyTheme(dark) {
+  document.body.classList.toggle('dark', dark);
+  document.body.classList.toggle('light', !dark);
+  const btn = $('#dark-toggle');
+  if (btn) {
+    btn.textContent = dark ? '\u2600' : '\u263D';
+    btn.setAttribute('aria-label', dark ? 'Switch to light theme' : 'Switch to dark theme');
+  }
+}
+
+// Dim any row whose data-requires dependency is off, so the page reads as a
+// dependency tree instead of a flat wall of switches.
+function syncDependencies() {
+  for (const row of document.querySelectorAll('[data-requires]')) {
+    const dep = $('#' + row.dataset.requires);
+    row.classList.toggle('disabled', !!(dep && !dep.checked));
+  }
+}
+
 function syncMaiaState() {
   const on = $('#maiaEnabled') && $('#maiaEnabled').checked;
   for (const key of MAIA_CHILD_FIELDS) {
     const el = $(`#${key}`);
-    if (el) el.disabled = !on;
+    if (!el) continue;
+    el.disabled = !on;
+    const row = el.closest('.set');
+    if (row) row.classList.toggle('disabled', !on);
   }
+  syncDependencies();
+  const total = MAIA_CHILD_FIELDS.length;
+  const el = $('#maia-count');
+  if (el) el.textContent = on ? total + ' settings active' : total + ' settings';
 }
 
-function setStatus(msg) {
-  const el = $('#status');
-  el.textContent = msg;
-  setTimeout(() => { el.textContent = ''; }, 2000);
+function syncAutoplayState() {
+  const on = $('#autoPlay') && $('#autoPlay').checked;
+  const el = $('#autoplay-count');
+  if (el) el.textContent = on ? 'active' : 'off';
+  // Maia's auto-play replaces the alternative-move logic entirely, so
+  // presenting both as live choices would be misleading.
+  const maia = $('#maiaAutoPlay');
+  const note = $('#autoPlayConflict');
+  if (maia && note) {
+    const conflict = on && $('#maiaEnabled') && $('#maiaEnabled').checked && maia.checked;
+    note.hidden = !conflict;
+  }
 }
 
 async function loadSettings() {
@@ -68,8 +116,9 @@ async function loadSettings() {
     if (el.type === 'checkbox') el.checked = val;
     else el.value = val;
   }
-  if (stored.darkMode) document.body.classList.add('dark');
+  applyTheme(stored.darkMode !== false);
   syncMaiaState();
+  syncAutoplayState();
 }
 
 async function saveSettings() {
@@ -84,9 +133,9 @@ async function saveSettings() {
     } else settings[key] = el.value;
   }
   await chrome.storage.local.set(settings);
-  if (settings.darkMode) document.body.classList.add('dark');
-  else document.body.classList.remove('dark');
+  applyTheme(settings.darkMode !== false);
   syncMaiaState();
+  syncAutoplayState();
   // Preload the network so the first analysed position is not the one that
   // pays the ~10MB model read. Failure is non-fatal: the panel just appears
   // when it is eventually ready.
@@ -94,12 +143,13 @@ async function saveSettings() {
     chrome.runtime.sendMessage({ type: 'maia-warm', model: settings.maiaModel })
       .catch(() => {});
   }
-  setStatus('Settings saved.');
+  setStatus('Saved');
 }
 
 async function loadArchive() {
   const { gameArchive = [] } = await chrome.storage.local.get('gameArchive');
   const list = $('#archiveList');
+  if (!list) return;
   if (!gameArchive.length) {
     list.innerHTML = '<div class="empty">No saved games yet.</div>';
     return;
@@ -142,6 +192,7 @@ function downloadFile(content, filename, type) {
 async function loadAccuracy() {
   const { gameArchive = [] } = await chrome.storage.local.get('gameArchive');
   const el = $('#accuracyStats');
+  if (!el) return;
   if (!gameArchive.length) {
     el.innerHTML = '<div class="empty">Play and analyze games to see your accuracy score.</div>';
     return;
@@ -155,26 +206,42 @@ async function loadAccuracy() {
   const best = Math.max(...games.map(g => g.accuracy));
   const worst = Math.min(...games.map(g => g.accuracy));
   el.innerHTML =
-    '<div class="row"><label>Average accuracy</label><strong>' + Math.round(avg) + '%</strong></div>' +
-    '<div class="row"><label>Best game</label><strong>' + Math.round(best) + '%</strong></div>' +
-    '<div class="row"><label>Worst game</label><strong>' + Math.round(worst) + '%</strong></div>' +
-    '<div class="row"><label>Games analyzed</label><strong>' + games.length + '</strong></div>';
+    '<div class="set"><div class="set-label">Average accuracy</div><strong>' + Math.round(avg) + '%</strong></div>' +
+    '<div class="set"><div class="set-label">Best game</div><strong>' + Math.round(best) + '%</strong></div>' +
+    '<div class="set"><div class="set-label">Worst game</div><strong>' + Math.round(worst) + '%</strong></div>' +
+    '<div class="set"><div class="set-label">Games analyzed</div><strong>' + games.length + '</strong></div>';
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  applyTheme(true);
   await loadSettings();
   await loadArchive();
   await loadAccuracy();
 
   for (const key of Object.keys(DEFAULTS)) {
     const el = $(`#${key}`);
-    if (el) {
-      el.addEventListener('change', saveSettings);
-      el.addEventListener('input', saveSettings);
-    }
+    if (!el) continue;
+    el.addEventListener('change', () => { saveSettings(); });
+    el.addEventListener('input', () => { saveSettings(); });
   }
 
-  $('#analyzeFen').addEventListener('click', async () => {
+  // Repaint dependencies immediately on toggle; the save listener above
+  // already handles persistence.
+  for (const el of document.querySelectorAll('input[type="checkbox"]')) {
+    el.addEventListener('change', () => {
+      syncMaiaState();
+      syncAutoplayState();
+      syncDependencies();
+    });
+  }
+
+  $('#dark-toggle')?.addEventListener('click', async () => {
+    const dark = !document.body.classList.contains('dark');
+    applyTheme(dark);
+    await chrome.storage.local.set({ darkMode: dark });
+  });
+
+  $('#analyzeFen')?.addEventListener('click', async () => {
     const fen = $('#fenInput').value.trim();
     if (!fen) return setStatus('Enter a FEN first.');
     try {
@@ -192,7 +259,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
-  $('#exportAll').addEventListener('click', async () => {
+  $('#exportAll')?.addEventListener('click', async () => {
     const { gameArchive = [] } = await chrome.storage.local.get('gameArchive');
     if (!gameArchive.length) return setStatus('No games to export.');
     let allPgn = '';
@@ -202,11 +269,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     downloadFile(allPgn, 'all-games.pgn', 'application/x-chess-pgn');
   });
 
-  $('#clearArchive').addEventListener('click', async () => {
+  $('#clearArchive')?.addEventListener('click', async () => {
     if (!confirm('Clear all saved games?')) return;
     await chrome.storage.local.set({ gameArchive: [], accuracyData: [] });
     loadArchive();
     loadAccuracy();
-    setStatus('Archive cleared.');
+    setStatus('Archive cleared');
   });
 });

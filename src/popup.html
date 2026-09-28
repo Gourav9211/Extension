@@ -3,104 +3,132 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Chess Position Analyst</title>
+  <title>Chess Analyst</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <main>
-    <header>
-      <div class="header-row">
+  <div class="shell">
+    <header class="top">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">&#9822;</div>
         <div>
-          <p class="eyebrow">LIVE ASSISTANT</p>
-          <h1>Best move</h1>
-        </div>
-        <div class="header-btns">
-          <button id="dark-toggle" class="icon-btn" type="button" title="Toggle dark mode">&#9790;</button>
+          <div class="brand-name">Chess Analyst</div>
         </div>
       </div>
-      <p class="muted">Monitoring your game in real-time.</p>
+      <div class="spacer" style="flex:1"></div>
+      <button id="dark-toggle" class="icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">&#9789;</button>
+      <button id="toggle-analysis" class="icon-btn" type="button" title="Pause analysis (Ctrl+Shift+A)" aria-label="Pause analysis" aria-pressed="false">&#9210;</button>
     </header>
 
-    <div id="update-banner" class="update-banner" hidden>
-      <span id="update-text"></span>
-      <a id="update-link" href="#" target="_blank" rel="noopener noreferrer">View release</a>
-    </div>
-
-    <div class="eval-bar-container" id="eval-container" hidden>
-      <div class="eval-label" id="eval-label">0.0</div>
-      <div class="eval-bar">
-        <div class="eval-fill" id="eval-fill"></div>
+    <div class="body">
+      <div id="status-bar" class="pill" role="status" aria-live="polite">
+        <span class="pill-dot"></span>
+        <span class="pill-text" id="status-text">Waiting for game&hellip;</span>
       </div>
-      <div class="eval-sides"><span>&#9812;</span><span>&#9814;</span></div>
-    </div>
 
-    <div id="status-bar" class="status-bar">
-      <span class="dot"></span>
-      <span id="status-text">Waiting for game...</span>
-      <span class="shortcut-hint">Ctrl+Shift+A</span>
-    </div>
-
-    <div id="opening-banner" class="opening-banner" hidden>
-      <span class="opening-icon">&#9816;</span>
-      <span id="opening-name"></span>
-    </div>
-
-    <div id="classification-banner" class="classification-banner" hidden>
-      <span id="classify-icon"></span>
-      <span id="classify-text"></span>
-    </div>
-
-    <section id="result" hidden>
-      <div class="moves-section">
-        <div class="move-row primary">
-          <span>Play</span>
-          <strong id="move">--</strong>
-        </div>
-        <div class="alt-moves" id="alt-moves"></div>
+      <div id="update-banner" class="banner banner-update" hidden>
+        <span id="update-text"></span>
+        <a id="update-link" href="#" target="_blank" rel="noopener noreferrer">Release</a>
       </div>
-      <p id="engine"></p>
-      <div class="maia-section" id="maia-section" hidden>
-        <div class="maia-header">
-          <span class="maia-title">Maia <span id="maia-elo" class="maia-elo"></span></span>
-          <span class="maia-eval" id="maia-eval"></span>
+
+      <div id="opening-banner" class="banner banner-opening" hidden>
+        <span aria-hidden="true">&#9816;</span>
+        <span id="opening-name"></span>
+      </div>
+
+      <div id="classification-banner" class="banner banner-cls" hidden>
+        <span id="classify-icon" class="sym"></span>
+        <span id="classify-text"></span>
+      </div>
+
+      <div id="skeleton" class="card" hidden>
+        <div class="skel">
+          <div class="skel-line w40"></div>
+          <div class="skel-line w90"></div>
+          <div class="skel-line w70"></div>
         </div>
-        <div class="maia-moves" id="maia-moves"></div>
+      </div>
+
+      <div id="eval-container" class="card" hidden>
+        <div class="card-head">
+          <span class="card-title">Evaluation</span>
+        </div>
+        <div class="meter-wrap">
+          <div class="meter">
+            <div class="meter-fill" id="eval-fill"></div>
+            <div class="meter-cap" style="left:50%"></div>
+          </div>
+        </div>
+        <div class="meter-legend"><span>Black</span><span>White</span></div>
+      </div>
+
+      <section id="result" class="card" hidden>
+        <div class="card-head">
+          <span class="card-title">Best move</span>
+        </div>
+        <div class="primary-move">
+          <span class="best-move" id="move">--</span>
+          <span class="eval-chip">
+            <span class="eval-num white" id="eval-num">0.0</span>
+            <span class="eval-side" id="eval-side">white</span>
+          </span>
+        </div>
+        <div class="depth-line">
+          <span class="depth-badge" id="depth-badge">d22</span>
+          <span id="engine"></span>
+        </div>
+        <div class="alt-list" id="alt-moves"></div>
+      </section>
+
+      <section class="card maia" id="maia-section" hidden>
+        <div class="card-head">
+          <span class="card-title">Maia</span>
+        </div>
+        <div class="maia-top">
+          <span class="maia-rating" id="maia-elo">1500</span>
+          <span class="maia-wdl" id="maia-eval"></span>
+        </div>
+        <div class="maia-bars" id="maia-moves"></div>
         <p class="maia-note" id="maia-note"></p>
-      </div>
-      <div class="explanation" id="explanation-section" hidden>
-        <h2>Why</h2>
+      </section>
+
+      <section class="card explain" id="explanation-section" hidden>
+        <div class="card-head"><span class="card-title">Why</span></div>
         <p id="explanation"></p>
+      </section>
+
+      <div id="graph-section" class="card graph-card" hidden>
+        <canvas id="eval-graph" width="360" height="54"></canvas>
       </div>
-    </section>
 
-    <section id="no-game" class="empty-state">
-      <p>Open a game on Chess.com and start playing.</p>
-    </section>
+      <div id="history-section" class="card" hidden>
+        <div class="card-head">
+          <span class="card-title">History</span>
+          <span class="spacer"></span>
+          <span id="accuracy-badge" class="acc-badge" hidden></span>
+        </div>
+        <div class="hist" id="move-history"></div>
+      </div>
 
-    <div id="graph-section" class="graph-section" hidden>
-      <canvas id="eval-graph" width="340" height="60"></canvas>
+      <div id="no-game" class="card empty">
+        <div class="empty-art" aria-hidden="true">&#9822;</div>
+        <p>Open a game on Chess.com to start analysing.</p>
+      </div>
     </div>
 
-    <div id="history-section" class="history-section" hidden>
-      <div class="history-header">
-        <span class="history-title">Move History</span>
-        <span id="accuracy-badge" class="accuracy-badge" hidden></span>
-      </div>
-      <div id="move-history" class="move-history"></div>
-    </div>
-
-    <div class="version-row">
+    <div class="foot-meta">
       <span id="version-text"></span>
-      <span id="update-status-text" class="update-status-text"></span>
-      <button id="check-update" class="link-btn" type="button">Check now</button>
+      <span class="spacer"></span>
+      <span id="update-status-text"></span>
+      <button id="check-update" class="link" type="button">Check</button>
     </div>
 
-    <footer>
-      <button id="save-game" class="secondary" type="button">Save Game</button>
-      <button id="export-pgn" class="secondary" type="button">Export PGN</button>
-      <button id="settings" class="secondary" type="button">Settings</button>
+    <footer class="foot">
+      <button id="save-game" class="btn" type="button">Save</button>
+      <button id="export-pgn" class="btn" type="button">PGN</button>
+      <button id="settings" class="btn btn-ghost" type="button">Settings</button>
     </footer>
-  </main>
+  </div>
   <script src="popup.js"></script>
 </body>
 </html>
