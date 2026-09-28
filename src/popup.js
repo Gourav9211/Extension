@@ -355,6 +355,10 @@ function renderAccuracy(history) {
 }
 
 function renderAnalysis(analysis) {
+  const best = analysis.engine.moves[0];
+  console.log('[popup] analysis: best=' + best.move + ' ' + headlineEval(best).text +
+    ' maia=' + (analysis.maia && analysis.maia.moves[0] && analysis.maia.moves[0].uci) +
+    (analysis.classification ? ' [' + analysis.classification + ']' : ''));
   renderMoves(analysis.engine);
   renderEval(analysis.engine);
   renderClassification(analysis.classification);
@@ -471,13 +475,19 @@ async function refreshUpdateStatus(force) {
 }
 
 async function init() {
+  console.log('[popup] open v' + chrome.runtime.getManifest().version + ' theme=' +
+    (document.body.classList.contains('dark') ? 'dark' : 'light'));
   await loadSettings();
 
   // The master switch lives in the service worker, so ask rather than guess:
   // reading storage directly here would race the worker's own load.
   try {
     const r = await chrome.runtime.sendMessage({ type: 'get-settings' });
-    if (r && r.ok) setMonitoringUI(r.settings.monitoring !== false);
+    if (r && r.ok) {
+      setMonitoringUI(r.settings.monitoring !== false);
+      console.log('[popup] worker settings monitoring=' + r.settings.monitoring +
+        ' maia=' + (r.settings.maiaEnabled ? r.settings.maiaModel + ' elo ' + r.settings.maiaElo : 'off'));
+    }
   } catch (e) {}
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -543,6 +553,7 @@ toggleAnalysisBtn.addEventListener('click', async () => {
     }
   } catch (e) {}
   setMonitoringUI(!monitoring);
+  console.log('[popup] ' + (monitoring ? 'started' : 'paused') + ' monitoring');
   if (monitoring) setStatus('Monitoring active', 'live');
   else { setStatus('Analysis paused'); clearResultPanels(); noGame.hidden = false; }
 });
@@ -559,6 +570,7 @@ function applyTheme(dark) {
 darkToggle.addEventListener('click', async () => {
   const dark = !document.body.classList.contains('dark');
   applyTheme(dark);
+  console.log('[popup] theme -> ' + (dark ? 'dark' : 'light'));
   await chrome.storage.local.set({ darkMode: dark });
   // The graph draws with literal colours, so it has to be repainted on a
   // theme change or it keeps the previous palette.

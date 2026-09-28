@@ -20,6 +20,28 @@ function report(text) {
   chrome.runtime.sendMessage({ type: 'sf-line', text: text }).catch(function() {});
 }
 
+// The user inspects the service-worker console, not this offscreen document's,
+// so every offscreen lifecycle line is mirrored there with the same tag. Only
+// explicit calls to console.* are forwarded - the raw engine UCI stream already
+// reaches the worker via sf-line and is filtered there, so nothing is doubled.
+function forwardConsole(level, args) {
+  const text = Array.prototype.map.call(args, function(a) {
+    if (typeof a === 'string') return a;
+    if (a && a.stack && a.message) return a.message + ' (' + String(a).split('\n')[0] + ')';
+    if (a && a.message) return a.message;
+    try { return JSON.stringify(a); } catch (e) { return String(a); }
+  }).join(' ');
+  chrome.runtime.sendMessage({ type: 'offscreen-log', level: level, text: text }).catch(function() {});
+}
+for (const k of ['log', 'warn', 'error', 'info']) {
+  const orig = console[k];
+  console[k] = function() {
+    const args = Array.prototype.slice.call(arguments);
+    try { forwardConsole(k, args); } catch (e) {}
+    if (orig) return orig.apply(console, args);
+  };
+}
+
 function failover() {
   clearTimeout(readyTimer);
   readyTimer = null;
@@ -54,7 +76,6 @@ function startEngine() {
       console.log('[offscreen] non-string message:', typeof e.data, e.data);
       return;
     }
-    console.log('[offscreen] engine says: ' + text.substring(0, 120));
     if (!gotUciOk && text.indexOf('uciok') === 0) {
       gotUciOk = true;
       clearTimeout(readyTimer);
@@ -129,6 +150,13 @@ function startMaia() {
     }
     maiaWorker.onmessage = function(event) {
       const data = event.data || {};
+      // The model worker logs to its own console too, but the interesting
+      // line (model name + load time) is forwarded so it lands in the service
+      // worker's console like everything else.
+      if (data.type === 'maia-console') {
+        reportMaia(data.text || '');
+        return;
+      }
       if (data.type !== 'maia-result' && data.type !== 'maia-warmed') return;
       const entry = maiaPending.get(data.requestId);
       if (!entry) return;

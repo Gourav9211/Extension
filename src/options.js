@@ -119,6 +119,10 @@ async function loadSettings() {
   applyTheme(stored.darkMode !== false);
   syncMaiaState();
   syncAutoplayState();
+  console.log('[options] loaded ' + Object.keys(DEFAULTS).length + ' settings, theme=' +
+    (stored.darkMode !== false ? 'dark' : 'light') +
+    ', monitoring=' + (stored.monitoring != null ? stored.monitoring : DEFAULTS.monitoring) +
+    ', gemini=' + (stored.geminiKey ? 'key present' : 'no key'));
 }
 
 async function saveSettings() {
@@ -144,6 +148,9 @@ async function saveSettings() {
       .catch(() => {});
   }
   setStatus('Saved');
+  console.log('[options] saved ' + Object.keys(settings).length + ' settings' +
+    ' (monitoring=' + settings.monitoring + ', autoPlay=' + settings.autoPlay +
+    ', maia=' + (settings.maiaEnabled ? settings.maiaModel : 'off') + ')');
 }
 
 async function loadArchive() {

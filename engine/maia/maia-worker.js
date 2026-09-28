@@ -51,6 +51,7 @@ function load(model) {
   if (loading[model]) return loading[model];
   var file = modelFile(model);
   var url = assetUrl(file);
+  var startedAt = Date.now();
   var job = fetch(url)
     .then(function (res) {
       if (!res.ok) throw new Error('HTTP ' + res.status + ' for ' + file);
@@ -68,6 +69,12 @@ function load(model) {
       sessions[model] = session;
       delete loading[model];
       lastModel = model;
+      const loadedFor = (file === 'maia3-5m.onnx' ? '10.3 MB' : '6.4 MB') +
+        ', ' + ((Date.now() - startedAt) / 1000).toFixed(2) + 's';
+      console.log('[maia] loaded maia3-' + model + ' (' + loadedFor + ')');
+      // Forward the one interesting line to the offscreen document, which
+      // relays it into the service-worker console.
+      try { self.postMessage({ type: 'maia-console', text: 'loaded maia3-' + model + ' (' + loadedFor + ')' }); } catch (e) {}
       return session;
     })
     .catch(function (err) {

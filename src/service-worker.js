@@ -335,6 +335,12 @@ async function loadSettings() {
     else if (!isNaN(v) && v === 0 && /OneIn$/.test(key)) settings[key] = 0;
   }
   await loadMaiaSettings(stored);
+  console.log('[settings] loaded depth=' + settings.depth + ' multiPv=' + settings.multiPv +
+    ' autoPlay=' + settings.autoPlay + ' adaptiveOpponent=' + settings.adaptiveOpponent +
+    ' monitoring=' + settings.monitoring + ' maia=' + (settings.maiaEnabled ? settings.maiaModel +
+    ' elo ' + settings.maiaElo + ' vs ' + settings.maiaOpponentElo : 'off') +
+    ' gemini=' + (stored[GEMINI_KEY] ? 'key present' : 'no key') +
+    ' update=' + (stored.autoPlay ? 'on (' + settings.autoTimingMode + ')' : 'off'));
 }
 
 // Maia keys need their own validation because they are booleans, a choice from
@@ -386,6 +392,10 @@ async function checkForUpdate(force) {
   const cached = data.updateCheck || null;
   if (!force && cached && cached.lastChecked &&
       Date.now() - cached.lastChecked < UPDATE_CHECK_INTERVAL_MS) {
+    // Keep the console honest even when the answer comes back from cache.
+    console.log('[update] cached result: current=' + chrome.runtime.getManifest().version +
+      ' latest=' + (cached.latestVersion || '?') +
+      (cached.updateAvailable ? ' -> UPDATE AVAILABLE' : ' (up to date)'));
     return cached;
   }
   try {
@@ -400,11 +410,16 @@ async function checkForUpdate(force) {
       updateAvailable: compareVersions(latestVersion, chrome.runtime.getManifest().version) > 0
     };
     await chrome.storage.local.set({ updateCheck: status });
+    console.log('[update] latest=' + status.latestVersion + ' current=' +
+      chrome.runtime.getManifest().version +
+      (status.updateAvailable ? ' -> UPDATE AVAILABLE' : ' (up to date)'));
     return status;
   } catch (e) {
     if (cached && cached.lastChecked) {
+      console.warn('[update] GitHub unreachable, using cached result (stale)');
       return Object.assign({}, cached, { stale: true });
     }
+    console.warn('[update] check failed:', e.message);
     throw e;
   }
 }
@@ -785,12 +800,18 @@ async function explainWithGemini(fen, engine) {
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
       }
     );
-    if (!response.ok) return '';
+    if (!response.ok) {
+      console.warn('[gemini] explain failed: HTTP ' + response.status);
+      return '';
+    }
     const data = await response.json();
-    return (data.candidates && data.candidates[0] && data.candidates[0].content &&
+    const text = (data.candidates && data.candidates[0] && data.candidates[0].content &&
       data.candidates[0].content.parts && data.candidates[0].content.parts[0] &&
       data.candidates[0].content.parts[0].text) || '';
+    console.log('[gemini] explanation ready for ' + topMove.move + ' (' + text.length + ' chars)');
+    return text;
   } catch (e) {
+    console.warn('[gemini] explain error:', e.message);
     return '';
   }
 }
@@ -849,7 +870,14 @@ async function analyzePosition(fen, opts) {
   if (settings.maiaEnabled && (settings.maiaShow || (settings.autoPlay && settings.maiaAutoPlay))) {
     const legal = legalMovesFromFen(validated);
     const raw = await maiaPredict(validated, legal, { limit: 6 });
-    if (raw) maia = Object.assign({}, raw, { selection: chooseMaiaMove(raw, engine, validated, legal) });
+    if (raw) {
+      maia = Object.assign({}, raw, { selection: chooseMaiaMove(raw, engine, validated, legal) });
+      console.log('[maia] ' + validated.split(' ')[0].substring(0, 16) + ' -> ' +
+        (maia.moves[0] ? maia.moves[0].uci + ' ' + Math.round(maia.moves[0].prob * 100) + '%' : 'n/a') +
+        (maia.selection && maia.selection.uci ? ' play=' + maia.selection.uci + ' (' + maia.selection.reason + ')' : ''));
+    } else {
+      console.warn('[maia] prediction unavailable for ' + validated.split(' ')[0].substring(0, 16));
+    }
   }
 
   // In 'async' mode the caller wants the engine result immediately and will
@@ -866,6 +894,12 @@ async function analyzePosition(fen, opts) {
     timestamp: Date.now(), classification: classification
   });
   if (gameHistory.length > 200) gameHistory = gameHistory.slice(-200);
+
+  const bestMove = engine.moves[0];
+  logAnalysis(validated.split(' ')[0] + ' -> ' + bestMove.move +
+    (bestMove.mate != null ? ' mate ' + (bestMove.mate > 0 ? bestMove.mate : -bestMove.mate) :
+      bestMove.evaluation != null ? ' ' + (bestMove.evaluation > 0 ? '+' : '') + (bestMove.evaluation / 100).toFixed(1) : '') +
+    ' depth ' + engine.depth + ' pv=' + (bestMove.line || '').split(' ').slice(0, 6).join(' '));
 
   return {
     ok: true, fen: validated, engine: engine, explanation: explanation, opening: opening,
@@ -1599,7 +1633,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return false;
   }
   if (message.type === 'maia-line') {
-    logEngine(message.text);
+    // The offscreen document relays Maia diagnostics (including the model
+    // load line from the worker) into this console.
+    console.log('[maia] ' + message.text);
+    return false;
+  }
+  if (message.type === 'offscreen-log') {
+    // Offscreen lines already carry their own [offscreen]/[maia] tags; the
+    // level is preserved so warnings read as warnings.
+    const level = ['log', 'warn', 'error', 'info'].indexOf(message.level) !== -1 ? message.level : 'log';
+    console[level](message.text);
     return false;
   }
   if (message.type === 'warm-position') {
@@ -1627,6 +1670,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           elo: message.elo, limit: message.limit || 5
         });
         if (!maia) { sendResponse({ ok: false, error: 'maia unavailable' }); return; }
+        console.log('[maia] analyze ' + validated.split(' ')[0].substring(0, 16) + ' -> ' +
+          (maia.moves[0] ? maia.moves[0].uci + ' ' + Math.round(maia.moves[0].prob * 100) + '%' : 'n/a') +
+          ' on ' + maia.model);
         sendResponse({ ok: true, maia: maia });
       } catch (error) {
         sendResponse({ ok: false, error: error.message });
@@ -1749,7 +1795,9 @@ function monitoringEnabled() {
 // restarts and a toggled-off tab would keep sending positions.
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || changes.monitoring == null) return;
-  settings.monitoring = !!changes.monitoring.newValue;
+  const next = !!changes.monitoring.newValue;
+  settings.monitoring = next;
+  console.log('[monitor] master switch -> ' + (next ? 'ON' : 'OFF'));
   chrome.tabs.query({}, (tabs) => {
     for (const tab of tabs) applyMonitoringTo(tab.id);
   });
@@ -1775,10 +1823,15 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   }
 });
 
-ensureOffscreen().catch(function(e) {
-  console.error('Chess Analyst: offscreen setup failed:', e.message);
-});
-loadSettings();
-checkForUpdate(false).catch(function(e) {
-  logEngine('update check failed: ' + e.message);
-});
+// Clean startup: version banner, settings-loaded line, offscreen + engine
+// readiness, and the update check, all visible in the service-worker console.
+console.log('[chess] service worker v' + chrome.runtime.getManifest().version + ' started');
+loadSettings()
+  .then(() => ensureOffscreen())
+  .then(() => console.log('[chess] offscreen + engine path ready'))
+  .catch(function(e) { console.error('[chess] startup failed:', e.message); });
+checkForUpdate(false)
+  .then(function(u) {
+    if (u && u.updateAvailable) console.info('[chess] v' + u.latestVersion + ' is available: ' + u.releaseUrl);
+  })
+  .catch(function(e) { logEngine('update check failed: ' + e.message); });
