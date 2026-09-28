@@ -130,6 +130,26 @@ section {
 .alt-move { flex: 1; font: 700 14px ui-monospace, SFMono-Regular, monospace; color: var(--text); }
 .alt-eval { font: 600 12px ui-monospace, SFMono-Regular, monospace; color: var(--text-dim); }
 
+/* ---------- Maia ---------- */
+.maia-section {
+  border-left: 3px solid #8e6bd6; background: #f6f3fd;
+  border-radius: 0 9px 9px 0; padding: 9px 11px; margin-top: 12px;
+}
+.maia-section[hidden] { display: none; }
+.maia-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 7px; }
+.maia-title { font: 800 9.5px/1 ui-sans-serif, system-ui, sans-serif; text-transform: uppercase; letter-spacing: .8px; color: #6b4fb0; }
+.maia-elo { font-weight: 700; opacity: .75; }
+.maia-eval { font: 600 11.5px ui-monospace, SFMono-Regular, monospace; color: #6b5b8a; }
+.maia-moves { display: flex; flex-direction: column; gap: 5px; }
+.maia-row { display: flex; align-items: center; gap: 9px; }
+.maia-move { font: 700 13px ui-monospace, SFMono-Regular, monospace; color: #3a2f52; min-width: 52px; }
+.maia-prob-track { flex: 1; height: 5px; border-radius: 3px; background: #e3dcf5; overflow: hidden; }
+.maia-prob-fill { height: 100%; border-radius: 3px; background: #8e6bd6; }
+.maia-prob-num { font: 600 11px ui-monospace, SFMono-Regular, monospace; color: #7b6a99; min-width: 34px; text-align: right; }
+.maia-row.played .maia-move { color: #4b2fa8; }
+.maia-row.played .maia-prob-fill { background: #6b4fb0; }
+.maia-note { margin: 7px 0 0; font-size: 11.5px; line-height: 1.45; color: #6b5b8a; }
+
 .explanation { border-left: 3px solid #d9a441; background: #fbf6ea; border-radius: 0 9px 9px 0; padding: 9px 11px; margin-top: 12px; }
 .explanation h2 { margin: 0 0 5px; letter-spacing: .8px; }
 .explanation p { margin: 0; font-size: 13px; line-height: 1.55; color: #4c4433; }
@@ -220,6 +240,12 @@ body.dark .alt-row { background: var(--surface-2); }
 body.dark .alt-move { color: #fff; }
 body.dark .explanation { background: #262219; border-left-color: #d9a441; }
 body.dark .explanation p { color: #cfc4a8; }
+body.dark .maia-section { background: #241f33; border-left-color: #8e6bd6; }
+body.dark .maia-title { color: #b9a4ef; }
+body.dark .maia-eval, body.dark .maia-note, body.dark .maia-prob-num { color: #9d8fc4; }
+body.dark .maia-move { color: #ded4f7; }
+body.dark .maia-row.played .maia-move { color: #fff; }
+body.dark .maia-prob-track { background: #352e4b; }
 body.dark .eval-label { color: #fff; }
 body.dark .accuracy-badge { color: var(--accent-strong); }
 body.dark .history-move { color: var(--text); }

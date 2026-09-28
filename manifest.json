@@ -3,11 +3,21 @@
   "name": "Chess Position Analyst",
   "version": "0.13.3",
   "description": "Real-time chess analysis with local Stockfish engine, AI explanations, board highlights, and game archive.",
-  "permissions": ["storage", "activeTab", "downloads", "offscreen", "debugger"],
+  "permissions": [
+    "storage",
+    "activeTab",
+    "downloads",
+    "offscreen",
+    "debugger"
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
-  "host_permissions": ["https://generativelanguage.googleapis.com/*", "https://www.chess.com/*", "https://chess.com/*"],
+  "host_permissions": [
+    "https://generativelanguage.googleapis.com/*",
+    "https://www.chess.com/*",
+    "https://chess.com/*"
+  ],
   "background": {
     "service_worker": "src/service-worker.js",
     "type": "module"
@@ -18,15 +28,25 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://www.chess.com/*", "https://chess.com/*"],
-      "js": ["src/content.js"],
+      "matches": [
+        "https://www.chess.com/*",
+        "https://chess.com/*"
+      ],
+      "js": [
+        "src/content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["engine/*", "src/offscreen.html"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "engine/*",
+        "src/offscreen.html"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
   "commands": {

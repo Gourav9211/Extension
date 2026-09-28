@@ -23,8 +23,35 @@ const DEFAULTS = {
   autoSlowMaxMs: 10000,
   autoNormalOneIn: 5,
   autoNormalEvalCp: 150,
-  maxAutoPlayMs: 9000
+  maxAutoPlayMs: 9000,
+  maiaEnabled: false,
+  maiaModel: '5m',
+  maiaElo: 1500,
+  maiaOpponentElo: 0,
+  maiaAutoPlay: false,
+  maiaShow: true,
+  maiaMaxLossCp: 120,
+  maiaCandidatePool: 3,
+  maiaTemperature: 1,
+  maiaSearchLines: 6
 };
+
+// Fields that accept fractional values; parseInt would floor them to 0.
+const FLOAT_FIELDS = new Set(['maiaTemperature']);
+
+// Maia settings other than the master switch, dimmed while it is disabled.
+const MAIA_CHILD_FIELDS = [
+  'maiaModel', 'maiaElo', 'maiaOpponentElo', 'maiaAutoPlay', 'maiaShow',
+  'maiaMaxLossCp', 'maiaCandidatePool', 'maiaTemperature', 'maiaSearchLines'
+];
+
+function syncMaiaState() {
+  const on = $('#maiaEnabled') && $('#maiaEnabled').checked;
+  for (const key of MAIA_CHILD_FIELDS) {
+    const el = $(`#${key}`);
+    if (el) el.disabled = !on;
+  }
+}
 
 function setStatus(msg) {
   const el = $('#status');
@@ -42,6 +69,7 @@ async function loadSettings() {
     else el.value = val;
   }
   if (stored.darkMode) document.body.classList.add('dark');
+  syncMaiaState();
 }
 
 async function saveSettings() {
@@ -50,12 +78,22 @@ async function saveSettings() {
     const el = $(`#${key}`);
     if (!el) continue;
     if (el.type === 'checkbox') settings[key] = el.checked;
-    else if (el.type === 'number') settings[key] = parseInt(el.value) || def;
-    else settings[key] = el.value;
+    else if (el.type === 'number') {
+      const parsed = FLOAT_FIELDS.has(key) ? parseFloat(el.value) : parseInt(el.value, 10);
+      settings[key] = Number.isFinite(parsed) ? parsed : def;
+    } else settings[key] = el.value;
   }
   await chrome.storage.local.set(settings);
   if (settings.darkMode) document.body.classList.add('dark');
   else document.body.classList.remove('dark');
+  syncMaiaState();
+  // Preload the network so the first analysed position is not the one that
+  // pays the ~10MB model read. Failure is non-fatal: the panel just appears
+  // when it is eventually ready.
+  if (settings.maiaEnabled) {
+    chrome.runtime.sendMessage({ type: 'maia-warm', model: settings.maiaModel })
+      .catch(() => {});
+  }
   setStatus('Settings saved.');
 }
 

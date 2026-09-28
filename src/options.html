@@ -223,6 +223,95 @@
   </div>
 
   <div class="section">
+    <h2>Maia (human-like moves)</h2>
+    <p class="hint" style="margin:0 0 12px;">
+      Maia 3 is a chess transformer trained on real human games. Instead of
+      "best move, or the 2nd best every so often", it plays the move a player of
+      the chosen strength would actually pick. Runs entirely on-device - the
+      network is bundled with the extension and no position ever leaves your
+      computer.
+    </p>
+    <div class="row">
+      <label>Enable Maia</label>
+      <label class="toggle"><input type="checkbox" id="maiaEnabled"><span class="slider"></span></label>
+    </div>
+    <div class="row">
+      <label>Model</label>
+      <select id="maiaModel">
+        <option value="3m">3M (fastest, 6 MB)</option>
+        <option value="5m" selected>5M (best, 10 MB)</option>
+      </select>
+    </div>
+    <p class="hint" style="margin:4px 0 0;">
+      The rating below is fed to the network rather than choosing a separate
+      file, so either model covers every rating. The 3M model is an ablation
+      trained without the positional-bias components; it plays plausibly but
+      noticeably worse.
+    </p>
+    <div class="row">
+      <label>Player strength (Elo)</label>
+      <input id="maiaElo" type="number" min="100" max="3000" step="10" value="1500">
+    </div>
+    <div class="row">
+      <label>Opponent strength (Elo)</label>
+      <input id="maiaOpponentElo" type="number" min="0" max="3000" step="10" value="0">
+    </div>
+    <p class="hint" style="margin:4px 0 0;">
+      0 means "assume the opponent is the same strength as the player", which is
+      usually what you want when Maia is playing both sides. Set it to model a
+      specific opponent.
+    </p>
+    <div class="row">
+      <label>Play Maia's move in auto-play</label>
+      <label class="toggle"><input type="checkbox" id="maiaAutoPlay"><span class="slider"></span></label>
+    </div>
+    <p class="hint" style="margin:4px 0 0;">
+      Replaces the 2nd/3rd-best "alternative move" logic above while auto-play is
+      on. The two are never combined.
+    </p>
+    <div class="row">
+      <label>Show Maia in the popup</label>
+      <label class="toggle"><input type="checkbox" id="maiaShow" checked><span class="slider"></span></label>
+    </div>
+    <div class="row">
+      <label>Blunder guard (&plusmn; centipawns)</label>
+      <input id="maiaMaxLossCp" type="number" min="0" max="1000" step="10" value="120">
+    </div>
+    <p class="hint" style="margin:4px 0 0;">
+      A weak player hangs pieces. Any Maia move that costs more than this many
+      centipawns against Stockfish is rejected, and the best safe alternative
+      is played instead. Set to 0 to let Maia play unfiltered.
+    </p>
+    <div class="row">
+      <label>Maia candidate moves</label>
+      <input id="maiaCandidatePool" type="number" min="1" max="10" step="1" value="3">
+    </div>
+    <div class="row">
+      <label>Temperature</label>
+      <input id="maiaTemperature" type="number" min="0.05" max="5" step="0.05" value="1">
+    </div>
+    <p class="hint" style="margin:4px 0 0;">
+      How far Maia is allowed to wander from its favourite move. 1 follows
+      Maia's own probabilities, higher values play more varied moves, lower
+      values stick to the top choice.
+    </p>
+    <div class="row">
+      <label>Engine lines for the guard</label>
+      <input id="maiaSearchLines" type="number" min="1" max="10" step="1" value="6">
+    </div>
+    <p class="hint" style="margin:4px 0 0;">
+      Extra Stockfish lines searched while Maia drives auto-play, so its
+      candidates can be scored. Costs a little engine time; the popup still
+      shows only the lines from the Engine tab.
+    </p>
+    <p class="warn" style="margin:8px 0 0;">
+      Maia models imperfect human play, so it will play sub-optimally by design.
+      Auto-play of any kind violates chess.com fair-play rules and can get your
+      account banned - intended for practice against the computer.
+    </p>
+  </div>
+
+  <div class="section">
     <h2>UI</h2>
     <div class="row">
       <label>Sound notification</label>

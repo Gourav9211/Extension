@@ -12,6 +12,11 @@ function setExplanation(text) {
   explanationSection.hidden = !text;
 }
 const altMovesEl = document.querySelector('#alt-moves');
+const maiaSection = document.querySelector('#maia-section');
+const maiaEloEl = document.querySelector('#maia-elo');
+const maiaEvalEl = document.querySelector('#maia-eval');
+const maiaMovesEl = document.querySelector('#maia-moves');
+const maiaNoteEl = document.querySelector('#maia-note');
 const evalContainer = document.querySelector('#eval-container');
 const evalFill = document.querySelector('#eval-fill');
 const evalLabel = document.querySelector('#eval-label');
@@ -126,6 +131,68 @@ function renderMoves(engine) {
     row.appendChild(evalEl);
     altMovesEl.appendChild(row);
   });
+}
+
+// Maia's own distribution over legal moves. The percentages are relative to
+// what a player of that strength would consider, not to the engine's ranking,
+// which is why they get their own panel rather than joining the alt-move list.
+function renderMaia(maia) {
+  if (!maia || !maia.moves || !maia.moves.length) {
+    maiaSection.hidden = true;
+    return;
+  }
+  maiaSection.hidden = false;
+  // Maia-3 is told both ratings, so show the opponent's whenever it is not just
+  // mirroring the player's - otherwise the panel reads as if Maia were
+  // ignoring a setting the options page exposes.
+  maiaEloEl.textContent = maia.opponentElo && maia.opponentElo !== maia.elo
+    ? maia.elo + ' vs ' + maia.opponentElo
+    : maia.elo;
+
+  const wdl = maia.wdl || [0, 0, 0];
+  const win = Math.round((wdl[2] || 0) * 100);
+  const loss = Math.round((wdl[0] || 0) * 100);
+  maiaEvalEl.textContent = win + '% / ' + loss + '% win-loss';
+  if (typeof maia.scoreCp === 'number') {
+    const pawns = (maia.scoreCp / 100).toFixed(1);
+    maiaEvalEl.textContent = (pawns > 0 ? '+' : '') + pawns + ' \u00b7 ' + win + '/' + loss + ' w/l';
+  }
+
+  maiaMovesEl.innerHTML = '';
+  const selection = maia.selection;
+  const playedKey = selection && selection.uci ? selection.uci.substring(0, 4) : null;
+  const top = maia.moves[0].prob || 0;
+  maia.moves.slice(0, 5).forEach(function(m) {
+    const row = document.createElement('div');
+    row.className = 'maia-row';
+    if (playedKey && m.uci.substring(0, 4) === playedKey) row.classList.add('played');
+    const move = document.createElement('span');
+    move.className = 'maia-move';
+    move.textContent = m.uci;
+    const track = document.createElement('div');
+    track.className = 'maia-prob-track';
+    const fill = document.createElement('div');
+    fill.className = 'maia-prob-fill';
+    // Scale against Maia's own best move so the bars stay readable even when
+    // every candidate is improbable.
+    fill.style.width = (top > 0 ? Math.max(4, (m.prob / top) * 100) : 4) + '%';
+    track.appendChild(fill);
+    const num = document.createElement('span');
+    num.className = 'maia-prob-num';
+    num.textContent = Math.round((m.prob || 0) * 100) + '%';
+    row.appendChild(move);
+    row.appendChild(track);
+    row.appendChild(num);
+    maiaMovesEl.appendChild(row);
+  });
+
+  if (selection && selection.fromMaia) {
+    maiaNoteEl.textContent = 'Would play ' + selection.uci + '.';
+  } else if (selection && selection.reason === 'guarded') {
+    maiaNoteEl.textContent = 'Every move Maia wanted was too losing for the blunder guard, so Stockfish moves instead.';
+  } else {
+    maiaNoteEl.textContent = '';
+  }
 }
 
 function renderClassification(cls) {
@@ -254,6 +321,7 @@ function renderAnalysis(analysis) {
   renderMoves(analysis.engine);
   renderEval(analysis.engine);
   renderClassification(analysis.classification);
+  renderMaia(analysis.maia);
 
   const depth = analysis.engine.depth === 100 ? 'TB' : analysis.engine.depth || '?';
   const topMove = analysis.engine.moves[0];
@@ -314,6 +382,7 @@ chrome.runtime.onMessage.addListener((message) => {
       evalContainer.hidden = true;
       openingBanner.hidden = true;
       classifyBanner.hidden = true;
+      maiaSection.hidden = true;
     }
   }
 });
@@ -358,6 +427,7 @@ async function init() {
     setStatus('Open Chess.com to start');
     noGame.hidden = false;
     result.hidden = true;
+    maiaSection.hidden = true;
     return;
   }
   try {

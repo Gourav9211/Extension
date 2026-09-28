@@ -1,0 +1,77 @@
+Maia Chess Extension - Licensing
+================================
+
+This extension bundles components under two different licenses. The bundled
+files determine which terms apply to them.
+
+
+1. Maia-3 components: GNU Affero General Public License v3.0
+-------------------------------------------------------------
+
+The following are licensed under the GNU Affero General Public License,
+version 3 (AGPL-3.0):
+
+  engine/maia/maia3-3m.onnx
+  engine/maia/maia3-5m.onnx
+  engine/maia/maia3-encoder.js
+  engine/maia/maia3-moves.js
+
+The bundled ONNX networks are fp16 exports of Maia3-5M and the Maia3 3M
+ablation, converted for the browser by bqrio/maia3-onnx. The reference
+implementation is CSSLab/maia3. Both carry the AGPL-3.0 licence:
+
+  Model:   https://huggingface.co/UofTCSSLab/Maia3-5M
+  ONNX:    https://huggingface.co/bqrio/maia3-onnx
+  Source:  https://github.com/CSSLab/maia3
+
+Why this matters: the AGPL extends its source-availability requirement to
+conveying the software over a network. A packaged build of this extension
+therefore carries the corresponding-source obligations for these components.
+The corresponding source is this repository, together with the upstream
+Maia-3 sources linked above. The encoder and move-map files in
+engine/maia/ are derived from the upstream tokenizer and move vocabulary
+and are original implementations of them; the accompanying Python reference
+that generates the test expectations for them uses the upstream tokenizer
+directly.
+
+
+2. Runtime and engine components: MIT and MIT-licensed Stockfish
+----------------------------------------------------------------
+
+  engine/maia/ort/            onnxruntime-web, MIT
+                              https://github.com/microsoft/onnxruntime
+  engine/stockfish.js and
+  engine/sf171-*.js/.wasm     Stockfish, GPL-3.0-or-later
+  engine/nn-*.nnue,
+  engine/stockfish-nnue-*     Stockfish NNUE, GPL-3.0-or-later
+                              https://github.com/official-stockfish/Stockfish
+
+  src/                        extension source. See the note below.
+
+
+Note on the extension's own source
+----------------------------------
+The extension's own JavaScript, HTML and CSS in src/ are not covered by a
+licence file in this repository. Stockfish is GPL-3.0-or-later and is linked
+into this extension, and the Maia-3 components above are AGPL-3.0, so the
+combined distributed work must be released under terms compatible with both
+before it is redistributed. AGPL-3.0 is compatible with GPL-3.0 and is the
+stricter of the two, so AGPL-3.0 is a safe choice for the combined work.
+This file records that obligation; it is not a completed licence grant for
+the whole repository.
+
+If you redistribute this extension as a binary or a download, you must offer
+the complete corresponding source for the AGPL- and GPL-licensed components,
+which this repository satisfies for the Maia-3 code and the upstream Maia-3
+sources it links.
+
+
+Upstream copyright
+------------------
+Maia-3:      Copyright (c) the Maia-3 authors, CSSLab, University of Toronto
+Stockfish:   Copyright (c) the Stockfish authors
+onnxruntime: Copyright (c) Microsoft Corporation
+
+Maia was created for research into human-like chess play. The bundled weights
+were trained on human game data. Use responsibly: this extension is intended
+for post-game review and training, not for cheating in rated games.

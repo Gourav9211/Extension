@@ -31,6 +31,49 @@ const AUTO_DEFAULTS = {
   debounceMs: 500,
   maxAutoPlayMs: 9000
 };
+// Maia is a separate human-move model: instead of "play the engine's 2nd best
+// now and then", it plays the move a player of a given strength would actually
+// choose. Every value is user-configurable in the options page.
+//   maiaEnabled        master switch; when off nothing is even loaded
+//   maiaModel          which bundled network to run ('3m' or '5m')
+//   maiaElo            the rating Maia plays at; Maia-3 takes this as an
+//                      input, so one network covers the whole range
+//   maiaOpponentElo    the rating of the other player, which Maia also
+//                      conditions on (0 = assume it matches maiaElo)
+//   maiaAutoPlay       use Maia to pick auto-played moves (replaces the humaniser)
+//   maiaShow           surface Maia's pick in the popup next to the engine line
+//   maiaMaxLossCp      blunder guard: drop Maia moves that cost more than this
+//                      many centipawns against Stockfish's best (0 = no guard)
+//   maiaCandidatePool  how many of Maia's top moves may be considered
+//   maiaTemperature    >1 spreads probability over the candidate moves,
+//                      <1 makes Maia more deterministic
+//   maiaSearchLines    extra Stockfish lines searched so the guard can score
+//                      Maia's candidates (only while Maia drives auto-play)
+const MAIA_MODELS = ['3m', '5m'];
+// The upstream UCI engine accepts 0-5000 for its Elo options. These bounds are
+// tighter only to keep a typo in the options page from asking for a strength
+// the model has never seen; real players all land well inside them.
+const MAIA_ELO_MIN = 100;
+const MAIA_ELO_MAX = 3000;
+
+function clampElo(value) {
+  return Math.min(MAIA_ELO_MAX, Math.max(MAIA_ELO_MIN, value));
+}
+// Shallowest engine search the blunder guard is allowed to act on. Below this
+// the per-line scores are dominated by move ordering, not by position quality.
+const MAIA_GUARD_MIN_DEPTH = 8;
+const MAIA_DEFAULTS = {
+  maiaEnabled: false,
+  maiaModel: '5m',
+  maiaElo: 1500,
+  maiaOpponentElo: 0,
+  maiaAutoPlay: false,
+  maiaShow: true,
+  maiaMaxLossCp: 120,
+  maiaCandidatePool: 3,
+  maiaTemperature: 1,
+  maiaSearchLines: 6
+};
 
 let analysisTimeout = null;
 let positionCache = new Map();
@@ -45,7 +88,7 @@ let lastEval = null;
 // of the newer one.
 let searchesStarted = 0;
 let bestmovesSeen = 0;
-let settings = Object.assign({ depth: 22, multiPv: 3, sound: true, classify: true, autoPlay: false, adaptiveOpponent: true, geminiPrompt: '' }, AUTO_DEFAULTS);
+let settings = Object.assign({ depth: 22, multiPv: 3, sound: true, classify: true, autoPlay: false, adaptiveOpponent: true, geminiPrompt: '' }, AUTO_DEFAULTS, MAIA_DEFAULTS);
 
 // Random integer in [min, max]; tolerates a swapped min/max from user input.
 function randMs(min, max) {
@@ -262,7 +305,7 @@ function setCache(fen, data) {
 }
 
 async function loadSettings() {
-  const keys = ['depth', 'multiPv', 'sound', 'classify', 'autoPlay', 'geminiPrompt'].concat(Object.keys(AUTO_DEFAULTS));
+  const keys = ['depth', 'multiPv', 'sound', 'classify', 'autoPlay', 'geminiPrompt'].concat(Object.keys(AUTO_DEFAULTS), Object.keys(MAIA_DEFAULTS));
   const stored = await chrome.storage.local.get(keys);
   if (stored.depth) settings.depth = stored.depth;
   if (stored.autoPlay != null) settings.autoPlay = !!stored.autoPlay;
@@ -279,6 +322,31 @@ async function loadSettings() {
     // must stay positive so e.g. a 0ms move time cannot hang the engine.
     else if (!isNaN(v) && v === 0 && /OneIn$/.test(key)) settings[key] = 0;
   }
+  await loadMaiaSettings(stored);
+}
+
+// Maia keys need their own validation because they are booleans, a choice from
+// a fixed model list, and numbers that legitimately allow 0 or values below 1.
+async function loadMaiaSettings(stored) {
+  if (stored.maiaEnabled != null) settings.maiaEnabled = !!stored.maiaEnabled;
+  if (stored.maiaAutoPlay != null) settings.maiaAutoPlay = !!stored.maiaAutoPlay;
+  if (stored.maiaShow != null) settings.maiaShow = !!stored.maiaShow;
+  if (MAIA_MODELS.indexOf(stored.maiaModel) !== -1) settings.maiaModel = stored.maiaModel;
+  // A pre-3.0 install stored maiaElo as one of 1100/1300/1500/1700/1900. Those
+  // are all valid Maia-3 ratings, so the value carries over unchanged and the
+  // migration is invisible - which is the only reason reusing the key is safe.
+  const elo = parseInt(stored.maiaElo, 10);
+  if (!isNaN(elo)) settings.maiaElo = clampElo(elo);
+  const oppo = parseInt(stored.maiaOpponentElo, 10);
+  if (!isNaN(oppo) && oppo >= 0) settings.maiaOpponentElo = Math.min(oppo, MAIA_ELO_MAX);
+  const loss = parseInt(stored.maiaMaxLossCp, 10);
+  if (!isNaN(loss) && loss >= 0) settings.maiaMaxLossCp = Math.min(loss, 1000);
+  const pool = parseInt(stored.maiaCandidatePool, 10);
+  if (!isNaN(pool) && pool >= 1) settings.maiaCandidatePool = Math.min(pool, 10);
+  const temp = parseFloat(stored.maiaTemperature);
+  if (!isNaN(temp) && temp > 0) settings.maiaTemperature = Math.min(Math.max(temp, 0.05), 5);
+  const lines = parseInt(stored.maiaSearchLines, 10);
+  if (!isNaN(lines) && lines >= 1) settings.maiaSearchLines = Math.min(lines, 10);
 }
 
 function detectOpening(fen) {
@@ -446,6 +514,164 @@ function warmEngine(fen) {
   searchesStarted += 1;
 }
 
+// ---- Maia ----
+// Inference happens in the offscreen document; this side only brokers the
+// request. A missing/failed Maia is never fatal - callers get null and carry on
+// with the Stockfish-only path.
+let maiaUnavailable = false;
+
+function normalizeMaiaElo(value) {
+  const elo = parseInt(value, 10);
+  return isNaN(elo) ? settings.maiaElo : clampElo(elo);
+}
+
+// Maia-3 conditions on both players' ratings. When no opponent rating is
+// configured the model is told both sides are the same strength, which is the
+// right default for the extension's own use (Maia playing either colour) and
+// matches the upstream UCI default of a single shared Elo.
+function maiaOpponentElo() {
+  return settings.maiaOpponentElo > 0 ? settings.maiaOpponentElo : settings.maiaElo;
+}
+
+async function maiaPredict(fen, legal, opts) {
+  if (!settings.maiaEnabled || maiaUnavailable) return null;
+  const options = opts || {};
+  const elo = normalizeMaiaElo(options.elo);
+  const model = MAIA_MODELS.indexOf(options.model) !== -1 ? options.model : settings.maiaModel;
+  const limit = options.limit || 6;
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'maia-predict',
+      fen: fen,
+      legal: legal,
+      model: model,
+      elo: elo,
+      opponentElo: maiaOpponentElo(),
+      repetition: options.repetition || 0,
+      limit: limit
+    });
+    if (!response || !response.ok) {
+      // A model that cannot load disables Maia for this session rather than
+      // retrying a doomed ~11MB fetch on every single position.
+      if (response && /load|session|fetch|backend|wasm|onnx/i.test(response.error || '')) {
+        maiaUnavailable = true;
+        console.warn('[maia] disabled for this session:', response.error);
+      }
+      return null;
+    }
+    return {
+      model: response.model,
+      elo: elo,
+      opponentElo: response.opponentElo,
+      scoreCp: response.scoreCp,
+      wdl: response.wdl,
+      moves: response.moves,
+      // Legal moves Maia's policy vocabulary has no slot for. With the
+      // 4352-entry Maia-3 vocabulary this set is always empty: the 4096
+      // from/to pairs plus the rank-7-to-rank-8 promotion block cover every
+      // legal move of either colour, because the board is mirrored for Black
+      // and a Black promotion therefore lands in the same block. It is
+      // reported rather than assumed, and excluded from selection, so a
+      // vocabulary that stopped covering a move could not start playing one.
+      unmapped: response.unmapped || [],
+      unmappedCount: response.unmappedCount || 0
+    };
+  } catch (e) {
+    if (!/Receiving end does not exist/i.test(e.message || '')) {
+      console.warn('[maia] request failed:', e.message);
+    }
+    return null;
+  }
+}
+
+// Engine lines are inconsistent by design: tablebase and UCI paths use
+// `.uci`, the parsed multiPV path uses a `.move` string plus a `.line` PV.
+// Normalising here keeps every consumer from having to know.
+function lineUci(line) {
+  if (!line) return '';
+  if (line.uci && /^[a-h][1-8][a-h][1-8]/.test(line.uci)) return line.uci;
+  if (typeof line.move === 'string' && /^[a-h][1-8][a-h][1-8]/.test(line.move)) return line.move;
+  if (typeof line.move === 'object' && line.move && /^[a-h][1-8][a-h][1-8]/.test(line.move.uci || '')) {
+    return line.move.uci;
+  }
+  if (line.line) {
+    const first = String(line.line).split(' ')[0];
+    if (/^[a-h][1-8][a-h][1-8]/.test(first)) return first;
+  }
+  return '';
+}
+
+// Puts Maia's pick on the same footing as the engine line, then samples from
+// the survivors. The blunder guard is the point of the whole feature: Maia
+// models a *weak* player, so at a 1200 rating it will happily hang a queen,
+// and the user asked for a human, not a patzer that throws the game.
+function chooseMaiaMove(maia, engine, fen, legal) {
+  if (!maia || !maia.moves || !maia.moves.length) return null;
+  const legalSet = new Set(legal);
+  // A move Maia's policy vocabulary has no slot for cannot be chosen on its
+  // account, even if the worker somehow offered it. Being explicit here means
+  // the extension can never play a move that was excluded from the distribution
+  // without also being excluded from the selection.
+  const unsupported = new Set(maia.unmapped || []);
+  let candidates = maia.moves.filter(function(move) {
+    return legalSet.has(move.uci) && !unsupported.has(move.uci);
+  });
+  if (!candidates.length) return null;
+  candidates = candidates.slice(0, Math.max(1, settings.maiaCandidatePool));
+
+  // A centipawn gap only means something if the engine actually searched. On
+  // trivial positions (and whenever the move-time cap cuts a search short) a
+  // shallow line can report a "100cp blunder" that is pure noise, and a guard
+  // that acts on it replaces Maia's correct move with the engine's - so the
+  // guard stands down below this depth.
+  const guard = settings.maiaMaxLossCp;
+  if (guard > 0 && engine && engine.moves && engine.moves.length) {
+    const bestUci = lineUci(engine.moves[0]);
+    const bestEval = typeof engine.moves[0].evaluation === 'number' ? engine.moves[0].evaluation : null;
+    const reached = engine.moves[0].depth;
+    // A mate score is terminal and always trustworthy; anything else needs a
+    // search deep enough for the gap between lines to mean something.
+    const mateInPlay = engine.moves.some(function(line) { return line.mate != null; });
+    const deepEnough = reached == null || reached >= MAIA_GUARD_MIN_DEPTH;
+    if (bestEval !== null && bestUci && (mateInPlay || deepEnough)) {
+      const evalByKey = new Map();
+      for (const line of engine.moves) {
+        const uci = lineUci(line);
+        if (uci && typeof line.evaluation === 'number') evalByKey.set(uci.substring(0, 4), line.evaluation);
+      }
+      const scored = candidates.filter(function(move) {
+        return typeof evalByKey.get(move.uci.substring(0, 4)) === 'number';
+      });
+      // Maia's favourite move is frequently outside a 3-line window, which says
+      // nothing about its quality. Only judge what the engine actually scored,
+      // and only override Maia when the engine did score its candidates and
+      // rejected every one of them.
+      if (scored.length) {
+        const safe = scored.filter(function(move) {
+          return bestEval - evalByKey.get(move.uci.substring(0, 4)) <= guard;
+        });
+        if (safe.length) candidates = safe;
+        else return { uci: bestUci, fromMaia: false, reason: 'guarded' };
+      }
+    }
+  }
+
+  const temperature = settings.maiaTemperature;
+  let move = candidates[0];
+  if (candidates.length > 1 && temperature > 0) {
+    // Tempering the renormalised probabilities is equivalent to a softmax of
+    // the raw logits at 1/temperature, so no logits need to leave the worker.
+    const weights = candidates.map(function(c) { return Math.pow(Math.max(c.prob, 1e-9), 1 / temperature); });
+    const total = weights.reduce(function(a, b) { return a + b; }, 0);
+    let target = Math.random() * total;
+    for (let i = 0; i < candidates.length; i++) {
+      target -= weights[i];
+      if (target <= 0) { move = candidates[i]; break; }
+    }
+  }
+  return { uci: move.uci, prob: move.prob, fromMaia: true, reason: 'maia' };
+}
+
 function processEngineLine(text) {
   if (/^info string/.test(text)) {
     logEngine(text.replace(/^info string\s*/, ''));
@@ -567,6 +793,8 @@ async function analyzePosition(fen, opts) {
   let opening = detectOpening(validated);
   let classification = null;
 
+  // Tablebase lines carry no centipawn evaluation, so the Maia blunder guard
+  // cannot score anything there; Maia is still shown, just never auto-played.
   if (pieceCount <= 7) {
     const tb = await queryTablebase(validated);
     if (tb) {
@@ -579,9 +807,15 @@ async function analyzePosition(fen, opts) {
     }
   }
 
+  // The guard needs more than the displayed lines to judge Maia's candidates.
+  const wantMaia = settings.maiaEnabled && !engine;
+  const lines = wantMaia && settings.maiaAutoPlay && settings.autoPlay
+    ? Math.max(settings.multiPv, settings.maiaSearchLines)
+    : settings.multiPv;
+
   if (!engine) {
     const cached = getCached(validated);
-    engine = cached || await evaluateWithStockfish(validated, settings.multiPv, opts && opts.movetimeMs);
+    engine = cached || await evaluateWithStockfish(validated, lines, opts && opts.movetimeMs);
     if (!cached) setCache(validated, engine);
   }
 
@@ -592,6 +826,15 @@ async function analyzePosition(fen, opts) {
   }
   const currCp = engine.moves[0].evaluation;
   if (currCp != null) lastEval = currCp;
+
+  // Maia runs after the engine line so the guard can use it as the yardstick.
+  // Needed whenever the popup shows it OR auto-play will play it.
+  let maia = null;
+  if (settings.maiaEnabled && (settings.maiaShow || (settings.autoPlay && settings.maiaAutoPlay))) {
+    const legal = legalMovesFromFen(validated);
+    const raw = await maiaPredict(validated, legal, { limit: 6 });
+    if (raw) maia = Object.assign({}, raw, { selection: chooseMaiaMove(raw, engine, validated, legal) });
+  }
 
   // In 'async' mode the caller wants the engine result immediately and will
   // fetch the Gemini explanation separately - the arrow must not wait on a
@@ -611,7 +854,8 @@ async function analyzePosition(fen, opts) {
   return {
     ok: true, fen: validated, engine: engine, explanation: explanation, opening: opening,
     classification: classification, classifyLabel: classifyLabel(classification),
-    tablebase: !!engine.tablebase, category: engine.category || null
+    tablebase: !!engine.tablebase, category: engine.category || null,
+    maia: maia, maiaElo: settings.maiaElo
   };
 }
 
@@ -1035,9 +1279,14 @@ async function handleBoardUpdate(fen, senderTabId) {
       // keeps showing the engine's real best line.
       let playDelayMs = 0;
       let playedRankLabel = 'BEST';
+      // Maia and the 2nd/3rd-best humaniser are alternative ways to pick a
+      // less-than-perfect move, so only one of them runs - stacking both would
+      // undo whatever Maia chose.
+      const maiaSelection = result.maia && result.maia.selection;
+      const useMaia = settings.autoPlay && settings.maiaAutoPlay && maiaSelection && maiaSelection.uci;
       if (settings.autoPlay && /^[a-h][1-8][a-h][1-8]/.test(uci)) {
         playDelayMs = autoPlayDelay();
-        const deviation = decideAutoPlayDeviation(result, uci);
+        const deviation = useMaia ? maiaSelection : decideAutoPlayDeviation(result, uci);
         if (deviation) {
           // Find the deviated move's true rank so the board shows an honest
           // badge for what is actually about to be played.
@@ -1048,11 +1297,15 @@ async function handleBoardUpdate(fen, senderTabId) {
           }
           uci = deviation.uci;
         }
+        if (useMaia) playedRankLabel = maiaSelection.fromMaia ? 'MAIA' : 'GUARDED';
         logAnalysis('auto-play in ' + (playDelayMs / 1000).toFixed(1) + 's' +
           ' (' + settings.autoTimingMode + ' mode, opp=' +
           (opponentPaceMs / 1000).toFixed(1) + 's, you=' +
           (userPaceMs / 1000).toFixed(1) + 's, elo ' +
-          (opponentElo || '?') + ', playing ' + playedRankLabel + ')');
+          (opponentElo || '?') + ', playing ' + playedRankLabel +
+          (useMaia && maiaSelection.fromMaia
+            ? ' maia-' + result.maia.elo + ' p=' + Math.round((maiaSelection.prob || 0) * 100) + '%'
+            : '') + ')');
       }
       if (/^[a-h][1-8][a-h][1-8]/.test(uci)) {
         // Ranked arrows: best (orange) plus 2nd/3rd choices in their own
@@ -1329,6 +1582,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (!engineReady) sfCommand('uci');
     return false;
   }
+  if (message.type === 'maia-line') {
+    logEngine(message.text);
+    return false;
+  }
   if (message.type === 'warm-position') {
     try { validateFen(message.fen); } catch (e) { return false; }
     warmEngine(message.fen);
@@ -1338,6 +1595,41 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     (async function() {
       try { sendResponse(await analyzePosition(message.fen)); }
       catch (error) { sendResponse({ ok: false, error: error.message }); }
+    })();
+    return true;
+  }
+  if (message.type === 'maia-analyze') {
+    // On-demand Maia read for the popup. Never throws - a failure just hides
+    // the panel, so a broken model can never take the popup down with it.
+    (async function() {
+      try {
+        await loadSettings();
+        const validated = validateFen(message.fen);
+        const legal = legalMovesFromFen(validated);
+        if (!legal.length) { sendResponse({ ok: false, error: 'no legal moves' }); return; }
+        const maia = await maiaPredict(validated, legal, {
+          elo: message.elo, limit: message.limit || 5
+        });
+        if (!maia) { sendResponse({ ok: false, error: 'maia unavailable' }); return; }
+        sendResponse({ ok: true, maia: maia });
+      } catch (error) {
+        sendResponse({ ok: false, error: error.message });
+      }
+    })();
+    return true;
+  }
+  if (message.type === 'maia-warm') {
+    // Fired after Maia is enabled so the first real position does not pay the
+    // model load. Warm-up is best-effort; a failure is invisible to the user.
+    (async function() {
+      try {
+        await loadSettings();
+        await ensureOffscreen();
+        await chrome.runtime.sendMessage({ type: 'maia-warm', elo: normalizeMaiaElo(message.elo) });
+        sendResponse({ ok: true });
+      } catch (error) {
+        sendResponse({ ok: false, error: error.message });
+      }
     })();
     return true;
   }
