@@ -99,6 +99,21 @@ function startEngine() {
   chrome.runtime.sendMessage({ type: 'sf-engine-loaded' }).catch(function() {});
 }
 
+// Stockfish 19+ terminates itself (std::exit) on an illegal position/FEN, so a
+// bad FEN kills the engine worker outright. Nothing about that is a build
+// problem, so a restart keeps the SAME candidate (the strongest one). The SW
+// drives this via 'sf-restart' after it sees the fatal CRITICAL ERROR line, and
+// sends 'uci' again once the fresh worker reports back, so engineReady recovers.
+function restartEngine(reason) {
+  clearTimeout(readyTimer);
+  readyTimer = null;
+  try { if (engine) engine.terminate(); } catch (e) {}
+  engine = null;
+  gotUciOk = false;
+  report('info string engine restart requested (' + reason + '): ' + ENGINE_CANDIDATES[candidateIndex].url);
+  startEngine();
+}
+
 // Stockfish does NOT boot automatically anymore. The service worker decides
 // when it is wanted: analysis sends 'sf-ensure' whenever the analyse engine is
 // Stockfish, so in Maia-only mode the engine is never even loaded. Keeping the
@@ -196,6 +211,13 @@ chrome.runtime.onMessage.addListener(function(message, _sender, sendResponse) {
     // check skipped it (Maia-only was on). startEngine is idempotent.
     startEngine();
     sendResponse({ ok: true, started: !!engine });
+    return true;
+  }
+  if (message.type === 'sf-restart') {
+    // The engine died on a fatal line (SF19 rejects an illegal position with
+    // std::exit). Boot a fresh one so analysis recovers without a reload.
+    restartEngine(message.reason || 'engine died');
+    sendResponse({ ok: true, restarting: true });
     return true;
   }
   if (message.type === 'sf-cmd') {

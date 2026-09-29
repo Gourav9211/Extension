@@ -747,6 +747,27 @@ function processEngineLine(text) {
   if (/^info string/.test(text)) {
     logEngine(text.replace(/^info string\s*/, ''));
     if (/falling back|failed to load|init failed|worker error/.test(text)) console.warn('[engine]', text);
+    // Stockfish 19 introduced strict position validation and calls std::exit on
+    // an illegal FEN, so the engine worker is dead from here on. Fail the
+    // current search immediately with a clear message rather than letting it
+    // hit the long timeout, then have the offscreen document boot a fresh
+    // engine so the NEXT analysis works without an extension reload.
+    if (/CRITICAL ERROR/.test(text)) {
+      engineReady = false;
+      if (pendingEval) {
+        const dead = pendingEval;
+        pendingEval = null;
+        clearTimeout(dead.timeout);
+        if (!dead.warm) dead.reject(new Error('Engine rejected the position (illegal FEN?)'));
+      }
+      logEngine('engine terminated itself (illegal position) - restarting');
+      // Small delay so engineReady is already false before the fresh worker's
+      // 'sf-engine-loaded' arrives and triggers the new 'uci' handshake.
+      setTimeout(function() {
+        chrome.runtime.sendMessage({ type: 'sf-restart', reason: 'illegal position' }).catch(function() {});
+      }, 250);
+      return;
+    }
   }
   if (text === 'uciok') {
     engineReady = true;
