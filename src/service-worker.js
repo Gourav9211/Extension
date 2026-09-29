@@ -501,6 +501,13 @@ async function queryTablebase(fen) {
   }
 }
 
+// A configured number of lines for the Maia guard can reach 10, so the clamp
+// matches that ceiling rather than the options-page select's 1-5.
+function clampMultiPv(value) {
+  const n = parseInt(value, 10);
+  return isNaN(n) ? 1 : Math.max(1, Math.min(10, n));
+}
+
 function evaluateWithStockfish(fen, multiPv, movetimeOverride) {
   return new Promise((resolve, reject) => {
     if (pendingEval) {
@@ -524,11 +531,17 @@ function evaluateWithStockfish(fen, multiPv, movetimeOverride) {
     // racing a fresh 'go' could truncate the new search.
     if (pendingEval) sfCommand('stop');
     sfCommand('position fen ' + fen);
+    // MultiPV is an OPTION, not a `go` argument. `go` only understands
+    // searchmoves/ponder/wtime/btime/winc/binc/movestogo/depth/nodes/mate/
+    // movetime/infinite/perft, so a `go ... multipv N` line is silently
+    // discarded and the engine searches a single variation - which is why the
+    // candidate list has to be built from the option instead.
+    sfCommand('setoption name MultiPV value ' + clampMultiPv(multiPv));
     // movetime caps the search so a position never hangs the UI; depth is
     // the usual stopping criterion on easy positions. Complex middlegames
     // will legitimately stop at a lower reached-depth - that is the time
     // budget doing its job, not a bug.
-    sfCommand('go depth ' + settings.depth + ' movetime ' + movetime + ' multipv ' + multiPv);
+    sfCommand('go depth ' + settings.depth + ' movetime ' + movetime);
     searchesStarted += 1;
   });
 }
@@ -544,6 +557,11 @@ function warmEngine(fen) {
     if (pendingEval === info) pendingEval = null;
   }, 6000);
   sfCommand('position fen ' + fen);
+  // Warming only primes the transposition table, so it asks for a single
+  // variation: MultiPV is a persistent option, and without this the warm
+  // search would pay for every configured candidate line. The next real
+  // search sets the option back before its own `go`.
+  sfCommand('setoption name MultiPV value 1');
   sfCommand('go depth 10 movetime 1200');
   searchesStarted += 1;
 }
@@ -608,7 +626,8 @@ async function maiaPredict(fen, legal, opts) {
       // reported rather than assumed, and excluded from selection, so a
       // vocabulary that stopped covering a move could not start playing one.
       unmapped: response.unmapped || [],
-      unmappedCount: response.unmappedCount || 0
+      unmappedCount: response.unmappedCount || 0,
+      ms: typeof response.ms === 'number' ? response.ms : null
     };
   } catch (e) {
     if (!/Receiving end does not exist/i.test(e.message || '')) {
@@ -762,7 +781,7 @@ function processEngineLine(text) {
     pendingEval = null;
     clearTimeout(info.timeout);
     const move = text.split(' ')[1];
-    const parsed = parseInfoLines(info.lines);
+    const parsed = anchorFirstMoveToBestmove(parseInfoLines(info.lines), move);
     if (!parsed.length && move) {
       parsed.push({ move: move, line: move, evaluation: null, mate: null, depth: null });
     }
@@ -775,25 +794,49 @@ function processEngineLine(text) {
   }
 }
 
+// UCI streams one `info` line per principal variation for every depth the
+// search reaches, so the collected lines are a history, not a result. The
+// authoritative value for a variation is its LAST line: earlier ones are
+// shallow and their scores are routinely stale enough to disagree with
+// `bestmove` (a line that looked like +63 at depth 9 can be a blunder by the
+// time the search stops).
+//
+// MultiPV searches label each variation with `multipv N`, and that index is the
+// engine's own ranking, so the list is keyed by slot and ordered by it. Builds
+// without MultiPV support emit a single evolving variation instead: there the
+// newest sighting of each move wins, and first-seen order is the search order.
 function parseInfoLines(lines) {
-  const result = [];
-  const seen = new Set();
+  const bySlot = new Map();
+  const order = [];
   for (const line of lines) {
     const pvMatch = line.match(/ pv (\S+(?:\s+\S+)*)/);
+    if (!pvMatch) continue;
     const scoreMatch = line.match(/ score (cp|mate) (-?\d+)/);
     const depthMatch = line.match(/ depth (\d+)/);
-    if (!pvMatch) continue;
-    const move = pvMatch[1].split(' ')[0];
-    if (seen.has(move)) continue;
-    seen.add(move);
-    result.push({
-      move: move, line: pvMatch[1],
+    const multipvMatch = line.match(/ multipv (\d+)/);
+    const entry = {
+      move: pvMatch[1].split(' ')[0], line: pvMatch[1],
       evaluation: scoreMatch && scoreMatch[1] === 'cp' ? parseInt(scoreMatch[2]) : null,
       mate: scoreMatch && scoreMatch[1] === 'mate' ? parseInt(scoreMatch[2]) : null,
       depth: depthMatch ? parseInt(depthMatch[1]) : null
-    });
+    };
+    const key = multipvMatch ? 'mpv:' + parseInt(multipvMatch[1], 10) : 'mv:' + entry.move;
+    if (!bySlot.has(key)) order.push(key);
+    bySlot.set(key, entry);
   }
-  return result;
+  return order.map(function(key) { return bySlot.get(key); });
+}
+
+// `bestmove` is the engine's final decision and outranks any `info` line, so
+// the headline line is pinned to it even if the last `info` for slot 1 disagrees
+// (a search cut off by the movetime cap can end on a different move).
+function anchorFirstMoveToBestmove(moves, bestMove) {
+  if (!bestMove || !moves.length) return moves;
+  if (moves[0].move === bestMove) return moves;
+  const at = moves.findIndex(function(m) { return m.move === bestMove; });
+  if (at > 0) return [moves[at]].concat(moves.slice(0, at), moves.slice(at + 1));
+  if (at === 0) return moves;
+  return [{ move: bestMove, line: bestMove, evaluation: null, mate: null, depth: null }].concat(moves);
 }
 
 async function explainWithGemini(fen, engine) {

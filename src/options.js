@@ -41,7 +41,7 @@ const DEFAULTS = {
 // Fields that accept fractional values; parseInt would floor them to 0.
 const FLOAT_FIELDS = new Set(['maiaTemperature']);
 
-// Maia settings other than the master switch, dimmed while it is disabled.
+// Maia settings other than the master switch, hidden while it is disabled.
 const MAIA_CHILD_FIELDS = [
   'maiaModel', 'maiaElo', 'maiaOpponentElo', 'maiaAutoPlay', 'maiaShow',
   'maiaMaxLossCp', 'maiaCandidatePool', 'maiaTemperature', 'maiaSearchLines'
@@ -70,12 +70,14 @@ function applyTheme(dark) {
   }
 }
 
-// Dim any row whose data-requires dependency is off, so the page reads as a
-// dependency tree instead of a flat wall of switches.
+// Hide any row whose data-requires dependency is off, so unavailable controls
+// do not compete with the settings that are currently actionable.
 function syncDependencies() {
   for (const row of document.querySelectorAll('[data-requires]')) {
     const dep = $('#' + row.dataset.requires);
-    row.classList.toggle('disabled', !!(dep && !dep.checked));
+    const hidden = !!(dep && !dep.checked);
+    row.hidden = hidden;
+    row.classList.toggle('disabled', hidden);
   }
 }
 
@@ -86,7 +88,10 @@ function syncMaiaState() {
     if (!el) continue;
     el.disabled = !on;
     const row = el.closest('.set');
-    if (row) row.classList.toggle('disabled', !on);
+    if (row) {
+      row.hidden = !on;
+      row.classList.toggle('disabled', !on);
+    }
   }
   syncDependencies();
   const total = MAIA_CHILD_FIELDS.length;
@@ -109,7 +114,10 @@ function syncEngineMode() {
     if (!el) continue;
     el.disabled = maiaOnly;
     const row = el.closest('.set');
-    if (row) row.classList.toggle('disabled', maiaOnly);
+    if (row) {
+      row.hidden = maiaOnly;
+      row.classList.toggle('disabled', maiaOnly);
+    }
   }
   const note = $('#engineModeNote');
   if (note) note.hidden = !maiaOnly;
@@ -295,7 +303,6 @@ document.addEventListener('DOMContentLoaded', async () => {
       syncMaiaState();
       syncAutoplayState();
       syncEngineMode();
-      syncDependencies();
     });
   }
 

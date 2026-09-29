@@ -13,11 +13,36 @@
       width: auto; max-width: 720px; margin: 0 auto; padding: 28px 20px 72px;
       background: var(--bg);
     }
+    body:not(:has(.top)) {
+      --bg: #12151c; --bg-2: #191d27; --surface: #1d222e;
+      --surface-2: #272d3b; --surface-3: #343c4d; --border: #303848;
+      --border-strong: #536176; --text: #f5f1eb; --text-dim: #a9b1c0;
+      --text-faint: #737e91; --accent: #ff8b5c; --accent-soft: #ff8b5c18;
+      --accent-line: #ff8b5c4d; --maia: #71e0db; --maia-soft: #71e0db18;
+      --warn: #f5c66b; --warn-soft: #f5c66b16; --good: #71e0db; --bad: #ff806d;
+      background: radial-gradient(circle at 92% 0%, #ff8b5c18, transparent 28%),
+        linear-gradient(145deg, #12151c 0%, #181d28 55%, #101218 100%);
+    }
+    body.light:not(:has(.top)) {
+      --bg: #f3f0eb; --bg-2: #fffaf5; --surface: #fffaf5;
+      --surface-2: #f0ebe5; --surface-3: #e3ddd6; --border: #ded6ce;
+      --border-strong: #b9aaa0; --text: #252832; --text-dim: #69707d;
+      --text-faint: #9299a5; --accent: #b94f2b; --accent-soft: #b94f2b14;
+      --accent-line: #b94f2b44; --maia: #087f7b; --maia-soft: #087f7b12;
+      --warn: #9a6817; --warn-soft: #9a681714; --good: #087f7b; --bad: #c94938;
+      background: radial-gradient(circle at 92% 0%, #ff8b5c2b, transparent 28%),
+        linear-gradient(145deg, #f3f0eb 0%, #fffaf5 55%, #eee9e4 100%);
+    }
     @media (prefers-color-scheme: light) { body:not(.dark) { background: #f6f7f9; } }
 
     .page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
     .page-head h1 { font-size: 22px; font-weight: 680; letter-spacing: -.02em; }
     .page-head .brand-mark { width: 30px; height: 30px; font-size: 15px; border-radius: 8px; }
+    .page-head .logo-grid {
+      width: 16px; height: 16px; display: block; border: 1px solid currentColor;
+      background: conic-gradient(currentColor 25%, transparent 0 50%, currentColor 0 75%, transparent 0);
+      background-size: 8px 8px; transform: rotate(-6deg); box-shadow: 0 0 0 2px var(--accent);
+    }
     .page-head .spacer { flex: 1; }
 
     .intro { color: var(--text-dim); font-size: 13px; margin-bottom: 20px; line-height: 1.6; }
@@ -75,22 +100,34 @@
 
     /* Toggle switch: the whole control is the hit target, and the knob
        animates on state change. */
-    .toggle { position: relative; width: 40px; height: 23px; flex: none; cursor: pointer; }
+    .toggle { position: relative; width: 44px; height: 24px; flex: none; cursor: pointer; }
     .toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
     .toggle .track {
       position: absolute; inset: 0;
-      background: var(--surface-3); border-radius: 999px;
-      transition: background .22s var(--ease);
+      display: flex; align-items: center; justify-content: flex-end;
+      padding: 0 6px; background: var(--surface-3); border: 1px solid var(--border);
+      border-radius: 999px; color: var(--text-faint);
+      font: 700 7px/1 var(--mono); letter-spacing: .06em;
+      transition: background .24s var(--ease), border-color .24s var(--ease), box-shadow .24s var(--ease);
     }
+    .toggle .track::after { content: 'OFF'; }
     .toggle .knob {
-      position: absolute; top: 3px; left: 3px;
-      width: 17px; height: 17px; border-radius: 50%;
-      background: #fff; box-shadow: 0 1px 3px #0006;
-      transition: transform .22s var(--ease);
+      position: absolute; z-index: 1; top: 3px; left: 3px;
+      width: 16px; height: 16px; border-radius: 50%;
+      background: var(--text); box-shadow: 0 2px 5px #0005, 0 0 0 2px var(--surface-3);
+      transition: transform .28s var(--ease), background .24s var(--ease), box-shadow .24s var(--ease);
     }
-    .toggle input:checked + .track { background: var(--accent); }
-    .toggle input:checked + .track .knob { transform: translateX(17px); }
-    .toggle input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .toggle input:checked + .track {
+      justify-content: flex-start; padding-left: 24px;
+      background: var(--accent); border-color: var(--accent); color: #28140e;
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .toggle input:checked + .track::after { content: 'ON'; }
+    .toggle input:checked + .track .knob {
+      transform: translateX(18px); background: #fffaf5;
+      box-shadow: 0 2px 5px #0004, 0 0 0 2px var(--accent);
+    }
+    .toggle input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 3px; }
 
     .note {
       padding: 10px 12px; margin-top: 4px;
@@ -147,7 +184,7 @@
 </head>
 <body>
   <div class="page-head">
-    <div class="brand-mark" aria-hidden="true">&#9822;</div>
+    <div class="brand-mark" aria-hidden="true"><span class="logo-grid"></span></div>
     <h1>Settings</h1>
     <span class="spacer"></span>
     <button id="dark-toggle" class="icon-btn" type="button" title="Toggle theme" aria-label="Toggle theme">&#9789;</button>

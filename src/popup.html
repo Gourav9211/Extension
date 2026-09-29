@@ -10,9 +10,14 @@
   <div class="shell">
     <header class="top">
       <div class="brand">
-        <div class="brand-mark" aria-hidden="true">&#9822;</div>
+        <div class="brand-mark" aria-hidden="true"><span class="logo-grid"></span></div>
         <div>
+          <div class="brand-kicker">Position lab</div>
           <div class="brand-name">Chess Analyst</div>
+          <div id="status-bar" class="pill" role="status" aria-live="polite">
+            <span class="pill-dot"></span>
+            <span class="pill-text" id="status-text">Waiting for game&hellip;</span>
+          </div>
         </div>
       </div>
       <div class="spacer" style="flex:1"></div>
@@ -21,11 +26,6 @@
     </header>
 
     <div class="body">
-      <div id="status-bar" class="pill" role="status" aria-live="polite">
-        <span class="pill-dot"></span>
-        <span class="pill-text" id="status-text">Waiting for game&hellip;</span>
-      </div>
-
       <div id="update-banner" class="banner banner-update" hidden>
         <span id="update-text"></span>
         <a id="update-link" href="#" target="_blank" rel="noopener noreferrer">Release</a>
@@ -111,8 +111,16 @@
       </div>
 
       <div id="no-game" class="card empty">
-        <div class="empty-art" aria-hidden="true">&#9822;</div>
-        <p>Open a game on Chess.com to start analysing.</p>
+        <div class="empty-art" aria-hidden="true">
+          <span class="empty-orbit empty-orbit-a"></span>
+          <span class="empty-orbit empty-orbit-b"></span>
+          <span class="empty-scan"></span>
+          <span class="empty-glyph">&#10022;</span>
+        </div>
+        <div class="empty-kicker">Awaiting position</div>
+        <h2 class="empty-title">Open a game to begin</h2>
+        <p>Chess Analyst will start reading the board as soon as a Chess.com game is open.</p>
+        <div class="empty-signal"><span></span>Ready to analyse</div>
       </div>
     </div>
 
@@ -120,13 +128,13 @@
       <span id="version-text"></span>
       <span class="spacer"></span>
       <span id="update-status-text"></span>
-      <button id="check-update" class="link" type="button">Check</button>
+      <button id="check-update" class="link" type="button" aria-label="Check for updates" title="Check for updates"><span class="control-icon" aria-hidden="true">&#8635;</span><span class="control-label">Check</span></button>
     </div>
 
     <footer class="foot">
-      <button id="save-game" class="btn" type="button">Save</button>
-      <button id="export-pgn" class="btn" type="button">PGN</button>
-      <button id="settings" class="btn btn-ghost" type="button">Settings</button>
+        <button id="save-game" class="btn" type="button" aria-label="Save game" title="Save game"><span class="control-icon" aria-hidden="true">&#8595;</span><span class="control-label">Save</span></button>
+        <button id="export-pgn" class="btn" type="button" aria-label="Export PGN" title="Export PGN"><span class="control-icon" aria-hidden="true">&#9776;</span><span class="control-label">PGN</span></button>
+        <button id="settings" class="btn btn-ghost" type="button" aria-label="Settings" title="Settings"><span class="control-icon" aria-hidden="true">&#9881;</span><span class="control-label">Settings</span></button>
     </footer>
   </div>
   <script src="popup.js"></script>
