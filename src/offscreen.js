@@ -1,12 +1,12 @@
 // Engine loading with automatic failover. Preference order:
-//   1. lila-stockfish-web Stockfish 17.1 (lichess build, ES-module worker,
+//   1. lila-stockfish-web Stockfish 19 (lichess build, ES-module worker,
 //      may use shared-memory threads - needs a bridge worker)
 //   2. Stockfish 16 NNUE single-threaded WASM
 //   3. legacy asm build
 // If a build fails to reach uciok within 12s it is terminated and the next
 // candidate starts, so analysis keeps working no matter what.
 const ENGINE_CANDIDATES = [
-  { url: 'engine/lsf-sf171-bridge.js', type: 'module' },
+  { url: 'engine/lsf-sf19-bridge.js', type: 'module' },
   { url: 'engine/stockfish-nnue-16-single.js' },
   { url: 'engine/stockfish.js' }
 ];
